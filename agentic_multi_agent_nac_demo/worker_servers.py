@@ -96,7 +96,7 @@ def make_worker_app(
             )
 
         payload = service_logic[name](arguments)
-        payload["subject"] = claims.get("sub")
+        payload["token_sub"] = claims.get("sub")
         payload["aud"] = claims.get("aud")
         payload["act_chain"] = chain_summary(claims)
         payload["token_preview"] = token_preview(token)

@@ -44,7 +44,7 @@ TRUSTED_ACTORS = {
     "calendar-service",
     "docs-service",
     "comms-service",
-}   
+}
 
 BASE_DIR = Path(__file__).resolve().parent
 KEY_DIR = Path(os.getenv("NAC_KEY_DIR", str(BASE_DIR / ".nac_keys")))
@@ -154,7 +154,10 @@ def exchange_token(
     requested_scopes = set(new_scope)
 
     if not requested_scopes.issubset(parent_scopes):
-        raise ValueError("scope escalation detected")
+        raise ValueError(
+            f"scope escalation detected — requested {requested_scopes - parent_scopes} "
+            f"not present in parent token"
+        )
 
     now = int(time.time())
     payload = {
@@ -167,19 +170,59 @@ def exchange_token(
         "session_id": parent.get("session_id"),
         "act": {
             "sub": actor,
-            "act": parent.get("act"),
+            "act": parent.get("act"),   # nest any existing act chain
         },
     }
     return jwt.encode(payload, PRIVATE_KEY, algorithm="RS256")
 
 
-def validate_token(token: str, expected_aud: str, required_scopes: list[str]) -> dict[str, Any]:
-    claims = jwt.decode(token, PUBLIC_KEY, algorithms=["RS256"], audience=expected_aud)
+def validate_token(
+    token: str,
+    expected_audience: str,
+    required_scopes: list[str],
+    trusted_actors: set[str] | list[str] | None = None,
+    enforce_audience: bool = True,
+    enforce_chain: bool = False,
+) -> dict[str, Any]:
+    """
+    Validate a JWT token with optional audience enforcement and actor-chain checking.
+
+    Parameters
+    ----------
+    token:             Raw JWT string.
+    expected_audience: The ``aud`` value the token must carry (checked when enforce_audience=True).
+    required_scopes:   Scopes that must all be present in the token's ``scope`` claim.
+    trusted_actors:    Set of actor ``sub`` values allowed in the delegation chain
+                       (only checked when enforce_chain=True).
+    enforce_audience:  When True (secure path) the ``aud`` claim is verified against
+                       expected_audience.  When False (baseline path) the audience claim
+                       is decoded but not validated.
+    enforce_chain:     When True the full nested ``act`` chain is walked and every actor
+                       sub must appear in trusted_actors.
+    """
+    if enforce_audience:
+        claims = jwt.decode(
+            token,
+            PUBLIC_KEY,
+            algorithms=["RS256"],
+            audience=expected_audience,
+        )
+    else:
+        # Baseline: skip audience check — mirrors the broken real-world pattern.
+        claims = jwt.decode(
+            token,
+            PUBLIC_KEY,
+            algorithms=["RS256"],
+            options={"verify_aud": False},
+        )
 
     token_scopes = set(_scope_list(claims.get("scope")))
-    missing = [scope for scope in required_scopes if scope not in token_scopes]
+    missing = [s for s in required_scopes if s not in token_scopes]
     if missing:
         raise ValueError(f"missing required scopes: {', '.join(missing)}")
+
+    if enforce_chain and trusted_actors is not None:
+        validate_actor_chain(claims, trusted_actors)
 
     return claims
 
@@ -201,12 +244,19 @@ def validate_resource_token(
     required_scopes: list[str],
     trusted_actors: set[str] | list[str],
 ) -> dict[str, Any]:
-    claims = validate_token(token, expected_aud=expected_aud, required_scopes=required_scopes)
-    validate_actor_chain(claims, trusted_actors=trusted_actors)
-    return claims
+    """Convenience wrapper: audience + scope + chain, all enforced."""
+    return validate_token(
+        token,
+        expected_audience=expected_aud,
+        required_scopes=required_scopes,
+        trusted_actors=trusted_actors,
+        enforce_audience=True,
+        enforce_chain=True,
+    )
+
 
 # ============================================================
-# 🔍 DEBUG / VISUALIZATION HELPERS
+# DEBUG / VISUALIZATION HELPERS
 # ============================================================
 
 def chain_summary(claims: dict) -> list[str]:

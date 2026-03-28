@@ -189,10 +189,27 @@ def make_assistant_app(*, secure: bool, oauth_url: str, worker_urls: dict[str, s
         root = _root_token_for(username)
         try:
             if secure:
-                cal_token = exchange_token(root, actor_sub="assistant-hub", audience=AUDIENCES["calendar"], scope="calendar:read")
-                docs_token = exchange_token(root, actor_sub="assistant-hub", audience=AUDIENCES["docs"], scope="docs:read")
-                comms_token = exchange_token(root, actor_sub="assistant-hub", audience=AUDIENCES["comms"], scope="email:send slack:write")
+                # FIX: use correct parameter names — new_audience, new_scope (list), actor
+                cal_token = exchange_token(
+                    root,
+                    new_audience=AUDIENCES["calendar"],
+                    new_scope=["calendar:read"],
+                    actor="assistant-hub",
+                )
+                docs_token = exchange_token(
+                    root,
+                    new_audience=AUDIENCES["docs"],
+                    new_scope=["docs:read"],
+                    actor="assistant-hub",
+                )
+                comms_token = exchange_token(
+                    root,
+                    new_audience=AUDIENCES["comms"],
+                    new_scope=["email:send", "slack:write"],
+                    actor="assistant-hub",
+                )
             else:
+                # Baseline: forward the root token unchanged (the anti-pattern we are demonstrating)
                 cal_token = root
                 docs_token = root
                 comms_token = root
@@ -234,8 +251,14 @@ def make_assistant_app(*, secure: bool, oauth_url: str, worker_urls: dict[str, s
         root = _root_token_for(username)
         try:
             if secure:
-                # The secure path should never allow this token to be used for docs abuse.
-                docs_token = exchange_token(root, actor_sub="assistant-hub", audience=AUDIENCES["docs"], scope="docs:read")
+                # Even in the secure path the token reaches docs — but docs has no hr:read scope,
+                # so the resource server rejects it.  This demonstrates scope attenuation.
+                docs_token = exchange_token(
+                    root,
+                    new_audience=AUDIENCES["docs"],
+                    new_scope=["docs:read"],
+                    actor="assistant-hub",
+                )
             else:
                 docs_token = root
 
