@@ -1,0 +1,134 @@
+{
+  "attacks": [
+    {
+      "id": "A1",
+      "description": "Scope escalation (HR read)",
+      "mode": "baseline",
+      "trials": 30,
+      "successes": 30,
+      "blocked": 0,
+      "success_rate": 1.0,
+      "block_rate": 0.0
+    },
+    {
+      "id": "A2",
+      "description": "Lateral movement (cross-service replay)",
+      "mode": "baseline",
+      "trials": 30,
+      "successes": 30,
+      "blocked": 0,
+      "success_rate": 1.0,
+      "block_rate": 0.0
+    },
+    {
+      "id": "A3",
+      "description": "Token replay (jti revocation)",
+      "mode": "baseline",
+      "trials": 30,
+      "successes": 30,
+      "blocked": 0,
+      "success_rate": 1.0,
+      "block_rate": 0.0
+    },
+    {
+      "id": "A4",
+      "description": "Identity attribution (act chain completeness)",
+      "mode": "baseline",
+      "trials": 30,
+      "successes": 30,
+      "blocked": 0,
+      "success_rate": 1.0,
+      "block_rate": 0.0
+    },
+    {
+      "id": "A1",
+      "description": "Scope escalation (HR read)",
+      "mode": "secure",
+      "trials": 30,
+      "successes": 0,
+      "blocked": 30,
+      "success_rate": 0.0,
+      "block_rate": 1.0
+    },
+    {
+      "id": "A2",
+      "description": "Lateral movement (cross-service replay)",
+      "mode": "secure",
+      "trials": 30,
+      "successes": 0,
+      "blocked": 30,
+      "success_rate": 0.0,
+      "block_rate": 1.0
+    },
+    {
+      "id": "A3",
+      "description": "Token replay (jti revocation)",
+      "mode": "secure",
+      "trials": 30,
+      "successes": 0,
+      "blocked": 30,
+      "success_rate": 0.0,
+      "block_rate": 1.0
+    },
+    {
+      "id": "A4",
+      "description": "Identity attribution (act chain completeness)",
+      "mode": "secure",
+      "trials": 30,
+      "successes": 0,
+      "blocked": 30,
+      "success_rate": 0.0,
+      "block_rate": 1.0
+    }
+  ],
+  "latency": [
+    {
+      "mode": "baseline",
+      "n": 30,
+      "mean_ms": 120.96,
+      "p50_ms": 112.34,
+      "p95_ms": 140.77,
+      "p99_ms": 314.29,
+      "min_ms": 108.76,
+      "max_ms": 314.29,
+      "stdev_ms": 37.09
+    },
+    {
+      "mode": "secure",
+      "n": 30,
+      "mean_ms": 662.65,
+      "p50_ms": 663.87,
+      "p95_ms": 700.14,
+      "p99_ms": 862.3,
+      "min_ms": 482.68,
+      "max_ms": 862.3,
+      "stdev_ms": 55.33
+    }
+  ],
+  "token_sizes": [
+    {
+      "label": "root (0-hop)",
+      "mode": "both",
+      "bytes": 732,
+      "chain_depth": 0
+    },
+    {
+      "label": "calendar child (1-hop)",
+      "mode": "secure",
+      "bytes": 747,
+      "chain_depth": 1
+    },
+    {
+      "label": "docs child (1-hop)",
+      "mode": "secure",
+      "bytes": 736,
+      "chain_depth": 1
+    },
+    {
+      "label": "external-api (2-hop)",
+      "mode": "secure",
+      "bytes": 792,
+      "chain_depth": 2
+    }
+  ]
+}

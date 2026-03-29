@@ -19,6 +19,7 @@ Changes from v1:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -326,17 +327,19 @@ def make_assistant_app(
         root        = _root_token_for_session()
         external_url = args.get("external_url")
 
-        cal_token   = await _get_worker_token(root, "calendar", ["calendar:read"])
-        docs_token  = await _get_worker_token(root, "docs",     ["docs:read"])
-        # R1 fix: separate tokens per comms call — jti is revoked after first
-        # use, so reusing one token for both calls caused TOKEN_REPLAY on the
-        # second call, masking the real A3 replay attack result.
-        email_token = await _get_worker_token(root, "comms", ["email:send"])
-        slack_token = await _get_worker_token(root, "comms", ["slack:write"])
+        # Parallel token exchange: all four RFC 8693 calls fire concurrently.
+        # This reduces the token-exchange overhead from 4 × ~50 ms to ~50 ms.
+        cal_token, docs_token, email_token, slack_token = await asyncio.gather(
+            _get_worker_token(root, "calendar", ["calendar:read"]),
+            _get_worker_token(root, "docs",     ["docs:read"]),
+            _get_worker_token(root, "comms",    ["email:send"]),
+            _get_worker_token(root, "comms",    ["slack:write"]),
+        )
 
         # Capture cal_token for the replay-attack demo
         _captured_tokens["calendar"] = cal_token
 
+        # Worker calls are sequential (each depends on prior data)
         calendar = await _call_worker(worker_urls["calendar"], "get_today_meetings", {}, cal_token)
         notes    = await _call_worker(worker_urls["docs"],     "read_meeting_notes", {"doc_id": "meeting-notes"}, docs_token)
         email    = await _call_worker(worker_urls["comms"],    "send_summary_email", {

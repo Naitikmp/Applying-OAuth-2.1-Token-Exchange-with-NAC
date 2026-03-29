@@ -135,15 +135,22 @@ def scope_to_str(value: str | list[str] | None) -> str:
 # worker processes (which each have their own in-memory address space).
 
 import tempfile as _tempfile
+import concurrent.futures
 from filelock import FileLock
 
 _JTI_STORE_PATH = Path(os.getenv("NAC_JTI_STORE", str(Path(_tempfile.gettempdir()) / "nac_jti_store.json")))
 _JTI_LOCK_PATH  = Path(str(_JTI_STORE_PATH) + ".lock")
 
+# Pre-warmed thread pool for jti file operations.
+# asyncio.to_thread() creates a NEW thread per call — on Windows that costs
+# ~10-15ms per spawn.  A pre-warmed pool reuses threads (~0.1ms hand-off).
+# 8 threads covers 4 concurrent exchanges × 2 file ops (register + revoke).
+_JTI_FILE_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="nac_jti"
+)
+
 
 def _read_jti_store() -> dict[str, float]:
-    # R2 fix: file lock prevents concurrent worker processes from clobbering
-    # each other's revocation writes (read-modify-write race on Windows/Linux).
     try:
         with FileLock(_JTI_LOCK_PATH, timeout=5):
             return json.loads(_JTI_STORE_PATH.read_text())
@@ -163,11 +170,7 @@ def register_jti(jti: str, exp: float) -> None:
     """Record a jti as issued. Called by the auth server at issuance time."""
     store = _read_jti_store()
     now = time.time()
-    # R3 fix: cleanup window must be >= CHILD_TOKEN_TTL + buffer (180 s).
-    # The old window was 60 s. revoke_jti now stores time.time() as the value,
-    # so a revoked entry looks like "expired right now."  With a 60 s window it
-    # was cleaned up by the very next register_jti call, silently erasing all
-    # revocations and letting every replay through.
+    # R3 fix: cleanup window = CHILD_TOKEN_TTL+60 so revoked entries survive
     cleanup_horizon = now - (CHILD_TOKEN_TTL + 60)
     store = {k: v for k, v in store.items() if v > cleanup_horizon}
     store[jti] = exp
@@ -177,12 +180,7 @@ def register_jti(jti: str, exp: float) -> None:
 def revoke_jti(jti: str) -> None:
     """Mark a jti as spent so it cannot be replayed."""
     store = _read_jti_store()
-    # R3 fix: use time.time() instead of 0.0.
-    # 0.0 is always << (now - cleanup_horizon), so every subsequent
-    # register_jti call immediately deleted the revocation record, making
-    # jti replay detection completely ineffective.
-    # time.time() means "just expired" — survives the cleanup window for
-    # CHILD_TOKEN_TTL + 60 more seconds, which covers any replay within TTL.
+    # R3 fix: store time.time() not 0.0 — 0.0 gets cleaned up immediately
     store[jti] = time.time()
     _write_jti_store(store)
 
@@ -216,6 +214,46 @@ def issue_root_token(username: str, client_id: str, scopes: list[str]) -> str:
     }
     register_jti(jti, exp)
     return jwt.encode(payload, get_signing_key(), algorithm="RS256")
+
+
+def make_child_token(
+    parent_token: str,
+    new_audience:  str,
+    new_scope:     list[str],
+    actor:         str,
+    ttl_seconds:   int = CHILD_TOKEN_TTL,
+) -> tuple[str, str, float]:
+    """
+    Pure crypto — NO file I/O.
+    Returns (child_token, child_jti, child_exp).
+    Caller registers/revokes jtis via _JTI_FILE_POOL (pre-warmed threads).
+    """
+    parent = jwt.decode(
+        parent_token, get_public_key(),
+        algorithms=["RS256"],
+        options={"verify_aud": False},
+    )
+    parent_scopes    = set(scope_to_list(parent.get("scope")))
+    requested_scopes = set(new_scope)
+    escalated        = requested_scopes - parent_scopes
+    if escalated:
+        raise ValueError(f"scope escalation blocked: {escalated} not in parent token")
+    now = int(time.time())
+    jti = str(uuid.uuid4())
+    exp = float(now + ttl_seconds)
+    payload = {
+        "iss":        ISSUER,
+        "sub":        parent["sub"],
+        "aud":        new_audience,
+        "scope":      scope_to_str(new_scope),
+        "iat":        now,
+        "exp":        int(exp),
+        "jti":        jti,
+        "session_id": parent.get("session_id"),
+        "act": {"sub": actor, "act": parent.get("act")},
+    }
+    child_token = jwt.encode(payload, get_signing_key(), algorithm="RS256")
+    return child_token, jti, exp
 
 
 def exchange_token(

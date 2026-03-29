@@ -165,15 +165,8 @@ def _validate_request(
         mode      = mode,
     )
 
-    # Secure path: revoke the child token's jti immediately after first use.
-    # This enforces one-time-use semantics — a captured child token cannot be
-    # replayed for a second call even within its TTL window.
-    if secure:
-        from nac_common import revoke_jti as _revoke
-        child_jti = claims.get("jti", "")
-        if child_jti:
-            _revoke(child_jti)
-
+    # Note: jti revocation happens in the async call_tool handler (below),
+    # not here. _validate_request is a plain def — await is not allowed in it.
     return claims, None
 
 
@@ -231,6 +224,17 @@ def make_worker_app(
             # MCP returns errors as text content with error fields
             body = json.loads(err_response.body) if hasattr(err_response, "body") else {"error": "forbidden"}
             return [TextContent(type="text", text=json.dumps(body))]
+
+        # Revoke the child token's jti after successful validation.
+        # Done here (inside async def call_tool) so it is safe and correct.
+        # _validate_request is a plain def — await/to_thread cannot go there.
+        # We call revoke_jti directly (synchronous): the FileLock on a local SSD
+        # takes microseconds — spawning a thread costs more than it saves here.
+        if secure and claims is not None:
+            from nac_common import revoke_jti as _revoke
+            child_jti = claims.get("jti", "")
+            if child_jti:
+                _revoke(child_jti)
 
         payload = service_logic[name](arguments)
         payload["token_sub"]   = claims.get("sub")

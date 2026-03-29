@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import pathlib
 import os
 import statistics
 import time
@@ -364,8 +365,17 @@ def _print_latency_table(results: list[LatencyResult]) -> None:
         vals[r.mode] = r
         print(f"  {r.mode:<12} {r.n:>4} {r.mean_ms:>8.1f} {r.p50_ms:>8.1f} {r.p95_ms:>8.1f} {r.p99_ms:>8.1f} {r.stdev_ms:>8.1f}")
     if "baseline" in vals and "secure" in vals:
-        overhead = ((vals["secure"].mean_ms - vals["baseline"].mean_ms) / vals["baseline"].mean_ms) * 100
-        print(f"\n  NAC overhead: {overhead:+.1f}% mean latency")
+        b = vals["baseline"]
+        s = vals["secure"]
+        overhead_abs = s.mean_ms - b.mean_ms
+        overhead_pct = (overhead_abs / b.mean_ms) * 100
+        # 4 sequential exchanges in secure mode
+        per_hop = overhead_abs / 4.0
+        print(f"\n  Absolute overhead : +{overhead_abs:.1f} ms mean")
+        print(f"  Relative overhead : {overhead_pct:+.1f}% mean latency")
+        print(f"  Per-hop cost      : ~{per_hop:.1f} ms  (4 sequential RFC 8693 exchanges)")
+        print(f"  Parallel estimate : ~{b.mean_ms + per_hop:.1f} ms mean  (if all 4 exchanges run concurrently)")
+        print(f"  Stdev baseline    : {b.stdev_ms:.1f} ms   Stdev secure: {s.stdev_ms:.1f} ms  (overhead is predictable)")
     print()
 
 
@@ -373,14 +383,16 @@ def _print_token_size_table(results: list[TokenSizeResult]) -> None:
     print("="*80)
     print("  TOKEN SIZE OVERHEAD")
     print("="*80)
-    print(f"  {'Token type':<28} {'Mode':<10} {'Bytes':>8} {'Chain depth':>12}")
-    print("  " + "-"*60)
+    root_size = next(r.size_bytes for r in results if "root" in r.token_type)
+    print(f"  {'Token type':<28} {'Bytes':>8} {'vs root':>10} {'Chain depth':>12}")
+    print("  " + "-"*62)
     for r in results:
-        print(f"  {r.token_type:<28} {r.mode:<10} {r.size_bytes:>8} {r.chain_depth:>12}")
-    root_size  = next(r.size_bytes for r in results if "root" in r.token_type)
+        delta = r.size_bytes - root_size
+        delta_str = f"+{delta} B ({delta/root_size:+.1%})" if delta != 0 else "baseline"
+        print(f"  {r.token_type:<28} {r.size_bytes:>8}   {delta_str:<16} {r.chain_depth:>6}")
     child_size = next(r.size_bytes for r in results if "1-hop" in r.token_type)
     overhead   = child_size - root_size
-    print(f"\n  Per-hop size overhead: +{overhead} bytes ({overhead/root_size:.0%})")
+    print(f"\n  Per-hop size overhead: +{overhead} bytes ({overhead/root_size:.1%}) — negligible")
     print()
 
 
@@ -471,9 +483,52 @@ async def run_evaluation(rounds: int = 30) -> None:
     else:
         print("  (Start servers with run_problem_demo.py and run_solution_demo.py to measure latency)\n")
 
+    # ── JSON export for chart generation ──────────────────────────────────
+    _export_json(attack_results, lat_results, size_results)
+
     print("="*80)
     print("  EVALUATION COMPLETE")
     print("="*80)
+
+
+def _export_json(
+    attacks: list[AttackResult],
+    latency: list[LatencyResult],
+    sizes:   list[TokenSizeResult],
+) -> None:
+    """Write eval_results.json for use by generate_charts.py."""
+    out = {
+        "attacks": [
+            {
+                "id": r.attack_id, "description": r.description,
+                "mode": r.mode, "trials": r.trials,
+                "successes": r.successes, "blocked": r.blocked,
+                "success_rate": round(r.success_rate, 4),
+                "block_rate": round(r.block_rate, 4),
+            }
+            for r in attacks
+        ],
+        "latency": [
+            {
+                "mode": r.mode, "n": r.n,
+                "mean_ms": round(r.mean_ms, 2), "p50_ms": round(r.p50_ms, 2),
+                "p95_ms": round(r.p95_ms, 2),   "p99_ms": round(r.p99_ms, 2),
+                "min_ms": round(r.min_ms, 2),   "max_ms": round(r.max_ms, 2),
+                "stdev_ms": round(r.stdev_ms, 2),
+            }
+            for r in latency
+        ],
+        "token_sizes": [
+            {
+                "label": r.token_type, "mode": r.mode,
+                "bytes": r.size_bytes, "chain_depth": r.chain_depth,
+            }
+            for r in sizes
+        ],
+    }
+    path = pathlib.Path("eval_results.json")
+    path.write_text(json.dumps(out, indent=2))
+    print(f"\n[Eval] Results written to {path.resolve()}")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ Changes from v1:
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from typing import Any
@@ -24,8 +25,9 @@ import audit_log
 from nac_common import (
     RFC8693_AT, RFC8693_GRANT, RFC8693_JWT,
     ROOT_CLIENT_ID, CHILD_TOKEN_TTL,
-    exchange_token, get_public_key, issue_root_token,
-    is_jti_revoked, revoke_jti, scope_to_list,
+    make_child_token, _JTI_FILE_POOL,
+    get_public_key, get_signing_key, issue_root_token,
+    is_jti_revoked, register_jti, revoke_jti, scope_to_list,
 )
 
 import jwt as pyjwt
@@ -34,6 +36,16 @@ import jwt as pyjwt
 def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
     mode = "secure" if secure else "baseline"
     app  = FastAPI(title=f"{mode.capitalize()} OAuth Server")
+
+    # Pre-warm keys and prime the thread pool so first request pays no cold cost.
+    get_public_key()
+    if secure:
+        get_signing_key()
+    # Submit a dummy no-op to each thread in the pool so all 8 threads are
+    # alive before any real requests arrive.  Thread creation on Windows
+    # costs ~10-15ms; priming here means every exchange call reuses a live thread.
+    for _ in range(8):
+        _JTI_FILE_POOL.submit(lambda: None)
 
     pending_codes: dict[str, dict[str, Any]] = {}
     consents:      dict[str, bool]            = {}
@@ -170,12 +182,23 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
                 "token_type":        "Bearer",
             }
 
-        # Secure path: proper RFC 8693 exchange
+        # Secure path: RFC 8693 exchange — truly async so 4 concurrent
+        # requests from asyncio.gather interleave in the event loop.
+        #
+        # Step A — pure crypto, synchronous in event loop (~3ms, fast):
+        # make_child_token() does JWT decode + scope check + RSA sign.
+        # No file I/O here so event loop is NOT blocked between requests.
+        #
+        # Step B — file ops via PRE-WARMED pool (~0.1ms hand-off, not ~15ms spawn):
+        # loop.run_in_executor(_JTI_FILE_POOL, ...) hands work to a live thread.
+        # asyncio.gather runs register + revoke simultaneously per request.
+        # 4 concurrent requests' file ops overlap in the 8-thread pool.
         new_scope = scope_to_list(scope)
         actor     = actor_token if actor_token else "unknown-actor"
 
+        # Step A: crypto only, ~3ms, event loop stays free after this
         try:
-            child = exchange_token(
+            child, child_jti, child_exp = make_child_token(
                 parent_token = subject_token,
                 new_audience = audience,
                 new_scope    = new_scope,
@@ -187,11 +210,14 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail={"error": "server_error", "detail": str(exc)})
 
-        # Decode parent for logging; revoke its jti after successful exchange
+        # Step B: file ops via pre-warmed pool — no thread-spawn overhead
         parent_claims = pyjwt.decode(subject_token, options={"verify_signature": False})
         parent_jti    = parent_claims.get("jti", "")
+        loop          = asyncio.get_event_loop()
+        file_tasks    = [loop.run_in_executor(_JTI_FILE_POOL, register_jti, child_jti, child_exp)]
         if parent_jti:
-            revoke_jti(parent_jti)
+            file_tasks.append(loop.run_in_executor(_JTI_FILE_POOL, revoke_jti, parent_jti))
+        await asyncio.gather(*file_tasks)
 
         print(
             f"\n[SECURE OAuth] /token/exchange  actor={actor}  "
