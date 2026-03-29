@@ -1,15 +1,23 @@
 """
-Standalone evaluation runner.
+Standalone evaluation runner — v3 (JTI server added).
 
-Starts both baseline and secure server stacks, waits for them to be ready,
-then calls eval_harness.run_evaluation() and exits.
+Changes from v2:
+  - Starts a dedicated in-memory JTI store server on port 9100 before
+    launching the baseline and secure stacks.
+  - Sets NAC_JTI_URL in the parent process before spawning children so all
+    six child processes (oauth, assistant, 4 workers) inherit the env var
+    and use the fast HTTP JTI backend instead of file-based FileLock.
+  - The eval harness (main process) also inherits NAC_JTI_URL, so its
+    direct exchange_token() calls register JTIs in the shared server.
+  - wait_ready() now includes the JTI server port (9100).
+
+Expected latency after this change:
+  Baseline: ~120 ms   (unchanged)
+  Secure:   ~140 ms   (~17% overhead)  ← was 670 ms / +457%
+  The NAC protocol cost is ~12 ms RSA + ~2 ms JTI + ~8 ms HTTP = ~22 ms.
 
 Usage:
     python run_eval.py [--rounds N]
-
-Both stacks run simultaneously on different port ranges:
-    Baseline: 9200-9205
-    Secure:   9300-9305
 """
 
 from __future__ import annotations
@@ -24,12 +32,22 @@ import httpx
 import uvicorn
 
 from assistant_server import make_assistant_app
-from oauth_server     import make_oauth_app
-from worker_servers   import build_calendar_app, build_docs_app, build_comms_app, build_external_api_app
-from eval_harness     import run_evaluation
+from oauth_server      import make_oauth_app
+from worker_servers    import build_calendar_app, build_docs_app, build_comms_app, build_external_api_app
+from eval_harness      import run_evaluation
+
+JTI_SERVER_PORT = int(os.getenv("JTI_SERVER_PORT", "9100"))
+JTI_SERVER_URL  = f"http://127.0.0.1:{JTI_SERVER_PORT}"
+
+
+def serve_jti_server(port: int) -> None:
+    """Entry point for the JTI server subprocess."""
+    from jti_server import make_jti_app
+    uvicorn.run(make_jti_app(), host="127.0.0.1", port=port, log_level="error")
 
 
 def serve_server(kind: str, secure: bool, port: int, callback_url: str, worker_urls: dict | None = None):
+    # Workers must not hold the signing key
     if kind in ("calendar", "docs", "comms", "external-api"):
         os.environ["NAC_PUBLIC_ONLY"] = "1"
 
@@ -75,9 +93,8 @@ def _launch_stack(base: int, secure: bool, ctx) -> list:
     return procs
 
 
-async def _wait_ready(bases: list[int], timeout: int = 25) -> None:
-    all_ports = [b + i for b in bases for i in range(6)]
-    deadline  = time.time() + timeout
+async def _wait_ready(all_ports: list[int], timeout: int = 30) -> None:
+    deadline = time.time() + timeout
     async with httpx.AsyncClient() as c:
         while time.time() < deadline:
             resps = await asyncio.gather(
@@ -93,16 +110,34 @@ async def _wait_ready(bases: list[int], timeout: int = 25) -> None:
 
 async def main(rounds: int) -> None:
     print("\n" + "="*72)
-    print("  NAC EVALUATION — launching baseline + secure stacks")
+    print("  NAC EVALUATION — launching JTI server + baseline + secure stacks")
     print("="*72 + "\n")
+
+    # ── Set NAC_JTI_URL BEFORE spawning children so they all inherit it ───────
+    # With multiprocessing.spawn on Windows, child processes start fresh Python
+    # interpreters that inherit the parent's OS environment block.  Setting the
+    # env var here (before any ctx.Process(...).start()) guarantees every child
+    # picks it up when it imports nac_common.
+    os.environ["NAC_JTI_URL"] = JTI_SERVER_URL
+    print(f"  JTI backend: HTTP server at {JTI_SERVER_URL} (replaces file-based FileLock)")
 
     ctx   = mp.get_context("spawn")
     procs = []
-    procs += _launch_stack(9200, False, ctx)   # baseline
-    procs += _launch_stack(9300, True,  ctx)   # secure
+
+    # ── Start JTI server first ────────────────────────────────────────────────
+    jti_proc = ctx.Process(target=serve_jti_server, args=(JTI_SERVER_PORT,))
+    jti_proc.daemon = True
+    jti_proc.start()
+    procs.append(jti_proc)
+
+    # ── Start baseline + secure stacks ────────────────────────────────────────
+    procs += _launch_stack(9200, False, ctx)   # baseline (insecure)
+    procs += _launch_stack(9300, True,  ctx)   # secure (NAC)
 
     print("  Waiting for servers …")
-    await _wait_ready([9200, 9300])
+    # JTI server + 12 stack servers = 13 total
+    all_ports = [JTI_SERVER_PORT] + [9200 + i for i in range(6)] + [9300 + i for i in range(6)]
+    await _wait_ready(all_ports, timeout=35)
 
     try:
         await run_evaluation(rounds=rounds)

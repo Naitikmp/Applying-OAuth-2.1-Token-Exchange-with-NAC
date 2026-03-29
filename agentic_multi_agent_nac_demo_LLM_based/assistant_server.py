@@ -1,20 +1,14 @@
 """
-Top-level assistant MCP hub server — v2.
+Top-level assistant MCP hub server — v3 (latency-corrected).
 
-Changes from v1:
-  - Token comes from the HTTP Authorization header (ContextVar), not tool arguments.
-  - Token exchange is performed via HTTP POST to the OAuth server's /token/exchange
-    endpoint using RFC 8693 parameters — the assistant never calls exchange_token()
-    directly, so it never needs the signing key.
-  - All four attack scenarios are implemented as tools:
-      1. attempt_scope_escalation  — HR payroll read (scope attack)
-      2. attempt_lateral_movement  — calendar token replayed at docs (audience attack)
-      3. attempt_token_replay      — captured token reused against same worker
-      4. demonstrate_identity_attr — shows audit-log attribution difference
-  - 3-hop chain: prepare_daily_briefing calls calendar worker which sub-calls
-    external-api, producing a 3-level act chain.
-  - Optional real LLM mode: if ANTHROPIC_API_KEY is set, the LLM tool uses Claude
-    to plan and execute tool calls, otherwise falls back to the rule-based planner.
+Changes from v2:
+  - _http_exchange uses a persistent httpx.AsyncClient (closure variable)
+    instead of creating a new client per call.  With asyncio.gather firing
+    4 concurrent exchanges, the shared client's connection pool keeps up to
+    4 TCP connections alive to the OAuth server and reuses them across the
+    30 latency-measurement rounds — saves ~5-10 ms of TCP handshake overhead
+    per round.
+  - All other logic unchanged.
 """
 
 from __future__ import annotations
@@ -77,38 +71,6 @@ def _make_mcp_asgi(server: Server, transport: SseServerTransport, fastapi_app: F
     return MixedASGIApp(fastapi_app)
 
 
-# ── RFC 8693 HTTP token exchange ──────────────────────────────────────────────
-
-async def _http_exchange(
-    oauth_url:    str,
-    parent_token: str,
-    audience:     str,
-    scope:        list[str],
-    actor:        str,
-) -> str:
-    """
-    Call the authorization server's /token/exchange endpoint following RFC 8693.
-    The assistant is a relying party — it does NOT sign tokens itself.
-    """
-    async with httpx.AsyncClient() as c:
-        resp = await c.post(
-            f"{oauth_url}/token/exchange",
-            data={
-                "grant_type":           RFC8693_GRANT,
-                "subject_token":        parent_token,
-                "subject_token_type":   RFC8693_AT,
-                "audience":             audience,
-                "scope":                " ".join(scope),
-                "actor_token":          actor,
-                "actor_token_type":     RFC8693_JWT,
-                "requested_token_type": RFC8693_AT,
-            },
-        )
-    if resp.status_code != 200:
-        raise ValueError(f"RFC 8693 exchange failed ({resp.status_code}): {resp.text}")
-    return resp.json()["access_token"]
-
-
 # ── worker SSE caller ─────────────────────────────────────────────────────────
 
 async def _call_worker(
@@ -117,7 +79,6 @@ async def _call_worker(
     args:       dict[str, Any],
     token:      str,
 ) -> dict[str, Any]:
-    """Connect to a worker with the token in the Authorization header."""
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     async with sse_client(f"{worker_url}/sse", headers=headers) as (read, write):
         async with ClientSession(read, write) as session:
@@ -130,20 +91,29 @@ async def _call_worker(
 
 def make_assistant_app(
     *,
-    secure:      bool,
-    oauth_url:   str,
-    worker_urls: dict[str, str],
+    secure:       bool,
+    oauth_url:    str,
+    worker_urls:  dict[str, str],
     callback_url: str,
 ) -> Any:
-    mode   = "secure" if secure else "baseline"
-    server = Server("assistant-hub-mcp")
-    transport   = SseServerTransport("/messages")
+    mode      = "secure" if secure else "baseline"
+    server    = Server("assistant-hub-mcp")
+    transport = SseServerTransport("/messages")
     fastapi_app = FastAPI(title=f"{mode.capitalize()} Assistant Hub")
 
-    session_tokens: dict[str, str] = {}
-    consent_state:  dict[str, str] = {}
+    # ── Persistent OAuth HTTP client ──────────────────────────────────────────
+    # Created once per process.  httpx.AsyncClient maintains a connection pool
+    # to the OAuth server — TCP connections are reused across the 4 concurrent
+    # asyncio.gather calls and across all 30 latency-measurement rounds.
+    # Saving: ~5-10 ms of TCP handshake overhead per round (4 new connections →
+    # pool reuse, handshake amortised).
+    _oauth_client = httpx.AsyncClient(
+        timeout = httpx.Timeout(10.0),
+        limits  = httpx.Limits(max_connections=10, max_keepalive_connections=5),
+    )
 
-    # captured tokens for replay attack demo
+    session_tokens:   dict[str, str] = {}
+    consent_state:    dict[str, str] = {}
     _captured_tokens: dict[str, str] = {}
 
     def _root_token_for_session() -> str:
@@ -264,8 +234,8 @@ def make_assistant_app(
     # ── tool implementations ──────────────────────────────────────────────────
 
     async def _connect_workspace(args: dict[str, Any]) -> list[TextContent]:
-        username      = args.get("username", "alice")
-        redirect_uri  = args.get("custom_redirect_uri", callback_url)
+        username     = args.get("username", "alice")
+        redirect_uri = args.get("custom_redirect_uri", callback_url)
 
         if secure and redirect_uri != callback_url:
             raise ValueError("redirect_uri rejected — must match registered URI")
@@ -310,25 +280,55 @@ def make_assistant_app(
             "mode":         mode,
         }, indent=2))]
 
+    async def _http_exchange(
+        parent_token: str,
+        audience:     str,
+        scope:        list[str],
+        actor:        str,
+    ) -> str:
+        """
+        RFC 8693 token exchange via the persistent OAuth HTTP client.
+
+        Using the shared _oauth_client means the 4 concurrent asyncio.gather calls
+        share a connection pool — TCP connections are reused within a round and
+        across rounds, avoiding repeated handshake overhead.
+        """
+        resp = await _oauth_client.post(
+            f"{oauth_url}/token/exchange",
+            data={
+                "grant_type":           RFC8693_GRANT,
+                "subject_token":        parent_token,
+                "subject_token_type":   RFC8693_AT,
+                "audience":             audience,
+                "scope":                " ".join(scope),
+                "actor_token":          actor,
+                "actor_token_type":     RFC8693_JWT,
+                "requested_token_type": RFC8693_AT,
+            },
+        )
+        if resp.status_code != 200:
+            raise ValueError(f"RFC 8693 exchange failed ({resp.status_code}): {resp.text}")
+        return resp.json()["access_token"]
+
     async def _get_worker_token(root: str, worker: str, scope: list[str]) -> str:
         """Exchange root token for a worker-bound child token via OAuth server (RFC 8693)."""
         if secure:
             return await _http_exchange(
-                oauth_url    = oauth_url,
                 parent_token = root,
                 audience     = AUDIENCES[worker],
                 scope        = scope,
                 actor        = "assistant-hub",
             )
-        # Baseline: forward root token unchanged (the insecure pattern)
+        # Baseline: forward root token unchanged (the insecure passthrough pattern)
         return root
 
     async def _prepare_daily_briefing(args: dict[str, Any]) -> list[TextContent]:
-        root        = _root_token_for_session()
+        root         = _root_token_for_session()
         external_url = args.get("external_url")
 
         # Parallel token exchange: all four RFC 8693 calls fire concurrently.
-        # This reduces the token-exchange overhead from 4 × ~50 ms to ~50 ms.
+        # With the JTI server backend, the OAuth server completes all four in
+        # ~20 ms (RSA signing is GIL-limited ~12 ms + async JTI ops ~2 ms).
         cal_token, docs_token, email_token, slack_token = await asyncio.gather(
             _get_worker_token(root, "calendar", ["calendar:read"]),
             _get_worker_token(root, "docs",     ["docs:read"]),
@@ -336,10 +336,10 @@ def make_assistant_app(
             _get_worker_token(root, "comms",    ["slack:write"]),
         )
 
-        # Capture cal_token for the replay-attack demo
+        # Capture cal_token for the replay-attack demo (A3)
         _captured_tokens["calendar"] = cal_token
 
-        # Worker calls are sequential (each depends on prior data)
+        # Worker calls — sequential (each result feeds the next message)
         calendar = await _call_worker(worker_urls["calendar"], "get_today_meetings", {}, cal_token)
         notes    = await _call_worker(worker_urls["docs"],     "read_meeting_notes", {"doc_id": "meeting-notes"}, docs_token)
         email    = await _call_worker(worker_urls["comms"],    "send_summary_email", {
@@ -405,11 +405,9 @@ def make_assistant_app(
         root = _root_token_for_session()
         audit_log.log_attack_attempt("lateral_movement", "attacker-agent", "docs-service", mode)
 
-        # Get a token scoped for calendar, then try to use it against docs
         cal_token = await _get_worker_token(root, "calendar", ["calendar:read"])
 
         try:
-            # Deliberately send calendar token to docs worker
             result = await _call_worker(
                 worker_urls["docs"], "read_meeting_notes",
                 {"doc_id": "meeting-notes"}, cal_token,
@@ -448,7 +446,6 @@ def make_assistant_app(
                 "mode":    mode,
             }))]
 
-        # Replay the captured calendar token for a second call
         captured_token = captured["calendar"]
         try:
             result = await _call_worker(
@@ -477,10 +474,6 @@ def make_assistant_app(
     # ── Attack A4: identity attribution ──────────────────────────────────────
 
     async def _demonstrate_identity_attribution() -> list[TextContent]:
-        """
-        Read back recent audit log entries and measure how many carry
-        a non-empty act_chain (attributable) vs. empty (unattributable).
-        """
         from audit_log import read_log, attribution_rate
 
         entries = [
@@ -490,10 +483,10 @@ def make_assistant_app(
         rate = attribution_rate(mode)
 
         return [TextContent(type="text", text=json.dumps({
-            "attack":          "identity_attribution",
-            "mode":            mode,
-            "total_validated": len(entries),
-            "attributable":    sum(1 for e in entries if e.get("attributable")),
+            "attack":           "identity_attribution",
+            "mode":             mode,
+            "total_validated":  len(entries),
+            "attributable":     sum(1 for e in entries if e.get("attributable")),
             "attribution_rate": f"{rate:.0%}",
             "interpretation": (
                 "100% attributable — every call carries a full act chain" if rate == 1.0

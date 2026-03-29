@@ -1,13 +1,10 @@
 """
 Structured audit logger for NAC demo.
 
-Every security-relevant event — token issuance, exchange, validation, rejection,
-tool call, tool block — is written as a JSON line to an append-only log file
-AND printed to stdout.
-
-The log is the primary evidence for the identity-confusion measurement:
-- Baseline log entries carry sub=alice, act_chain=[] → zero attributability
-- Secure log entries carry sub=alice, act_chain=["assistant-hub"] → full attributability
+Change from v1:
+  - clear_log() also resets the JTI store (HTTP server or file-based),
+    so each demo run starts with a clean state in both the log and the
+    JTI revocation registry.
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ from typing import Any
 _default_log = Path(tempfile.gettempdir()) / "nac_audit.log"
 LOG_FILE = Path(os.getenv("NAC_LOG_FILE", str(_default_log)))
 
-# Event type constants
 TOKEN_ISSUED     = "TOKEN_ISSUED"
 TOKEN_EXCHANGED  = "TOKEN_EXCHANGED"
 TOKEN_VALIDATED  = "TOKEN_VALIDATED"
@@ -149,21 +145,26 @@ def log_attack_attempt(attack_type: str, agent: str, target: str, mode: str) -> 
 
 
 def clear_log() -> None:
-    """Clear the log file and jti store at the start of each demo run."""
+    """
+    Clear the audit log and JTI store at the start of each demo run.
+
+    Resets whichever JTI backend is active — HTTP JTI server (NAC_JTI_URL)
+    or file-based store — so replay tests start from a clean state.
+    """
     try:
         LOG_FILE.write_text("")
     except Exception:
         pass
-    # Also clear the jti store file so replay tests are fresh each run
+
+    # Reset JTI store (both HTTP-server and file-based paths)
     try:
-        from nac_common import _JTI_STORE_PATH
-        _JTI_STORE_PATH.write_text("{}")
+        from nac_common import clear_jti_store
+        clear_jti_store()
     except Exception:
         pass
 
 
 def read_log() -> list[dict[str, Any]]:
-    """Return all log entries as parsed dicts."""
     try:
         lines = LOG_FILE.read_text().strip().splitlines()
         return [json.loads(ln) for ln in lines if ln.strip()]
@@ -172,10 +173,6 @@ def read_log() -> list[dict[str, Any]]:
 
 
 def attribution_rate(mode: str) -> float:
-    """
-    Fraction of TOOL_CALLED log entries that carry a non-empty act_chain
-    — i.e. calls that can be attributed to a specific delegating agent.
-    """
     entries = [e for e in read_log()
                if e.get("event") == TOKEN_VALIDATED and e.get("mode") == mode]
     if not entries:
