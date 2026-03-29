@@ -1,22 +1,13 @@
 """
-OAuth 2.1 / RFC 8693 Authorization Server — v3 (latency-corrected).
+OAuth 2.1 / RFC 8693 Authorization Server.
 
-Changes from v2:
-  - /token/exchange uses async httpx to call the JTI server directly when
-    NAC_JTI_URL is set.  This eliminates the run_in_executor thread-pool
-    overhead entirely on the hot path: the event loop awaits both JTI ops
-    (register + revoke_parent) concurrently via asyncio.gather.
-  - File-based fallback retained (run_in_executor + _JTI_FILE_POOL) when no
-    JTI server is configured.
-  - _JTI_FILE_POOL threads are still primed at startup for the fallback path.
-  - A persistent async httpx.AsyncClient is created once per OAuth server
-    process (closure variable in make_oauth_app) and reused across all
-    /token/exchange calls — TCP connections to the JTI server are kept alive.
+JTI operations (register + revoke) call Redis directly via the nac_common
+helpers.  Each call takes ~0.1 ms, so no threading or async wrappers are
+needed — they run inline in the event loop without meaningful blocking.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 import uuid
@@ -30,7 +21,7 @@ import audit_log
 from nac_common import (
     RFC8693_AT, RFC8693_GRANT, RFC8693_JWT,
     ROOT_CLIENT_ID, CHILD_TOKEN_TTL,
-    make_child_token, _JTI_FILE_POOL,
+    make_child_token,
     get_public_key, get_signing_key, issue_root_token,
     is_jti_revoked, register_jti, revoke_jti, scope_to_list,
 )
@@ -42,39 +33,10 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
     mode = "secure" if secure else "baseline"
     app  = FastAPI(title=f"{mode.capitalize()} OAuth Server")
 
-    # ── JTI async client (created once per process, reused for all exchanges) ──
-    # httpx.AsyncClient can be instantiated synchronously — connections open
-    # lazily on the first awaited request.  Using a closure variable (not a
-    # module global) means each OAuth server process has its own client.
-    _jti_server_url: str = os.getenv("NAC_JTI_URL", "")
-    _jti_async_client: httpx.AsyncClient | None = (
-        httpx.AsyncClient(base_url=_jti_server_url, timeout=3.0)
-        if _jti_server_url else None
-    )
-
-    async def _async_jti_register(jti: str, exp: float) -> None:
-        """Register a JTI via async HTTP (non-blocking)."""
-        if _jti_async_client:
-            await _jti_async_client.post("/register", params={"jti": jti, "exp": exp})
-        else:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(_JTI_FILE_POOL, register_jti, jti, exp)
-
-    async def _async_jti_revoke(jti: str) -> None:
-        """Revoke a JTI via async HTTP (non-blocking)."""
-        if _jti_async_client:
-            await _jti_async_client.post("/revoke", params={"jti": jti})
-        else:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(_JTI_FILE_POOL, revoke_jti, jti)
-
-    # ── prime keys + thread pool at startup ───────────────────────────────────
+    # ── warm up key material at startup ──────────────────────────────────────
     get_public_key()
     if secure:
         get_signing_key()
-    # Priming the file-pool is still useful for the fallback path (no JTI server).
-    for _ in range(8):
-        _JTI_FILE_POOL.submit(lambda: None)
 
     pending_codes: dict[str, dict[str, Any]] = {}
     consents:      dict[str, bool]            = {}
@@ -204,23 +166,18 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
 
         # ── Secure path: RFC 8693 exchange ────────────────────────────────────
         #
-        # Step A — pure crypto (~3 ms, GIL-limited, synchronous in event loop):
-        #   make_child_token() decodes + validates + RSA-signs the new token.
-        #   No I/O here — event loop stays responsive between concurrent requests.
+        # Step A — RSA sign (~3 ms, synchronous):
+        #   make_child_token() decodes + validates + signs the new token.
         #
-        # Step B — JTI ops via async HTTP to JTI server (~1 ms each, non-blocking):
-        #   register(child_jti) + revoke(parent_jti) run concurrently via
-        #   asyncio.gather.  With 4 concurrent /token/exchange requests from
-        #   asyncio.gather on the client side, all 8 JTI ops overlap in the
-        #   JTI server's thread pool — no serialisation, ~2 ms total.
-        #
-        # Compare with file-based (v2):
-        #   8 ops × FileLock × ~65 ms = ~520 ms sequential overhead.
+        # Step B — Redis JTI ops (~0.1 ms each):
+        #   register(child_jti): mark new token as active.
+        #   revoke(parent_jti):  mark parent as spent (one-time-use).
+        #   Both calls are fast enough to run inline without threading.
 
         new_scope = scope_to_list(scope)
         actor     = actor_token if actor_token else "unknown-actor"
 
-        # Step A: crypto only
+        # Step A: crypto
         try:
             child, child_jti, child_exp = make_child_token(
                 parent_token = subject_token,
@@ -234,14 +191,13 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail={"error": "server_error", "detail": str(exc)})
 
-        # Step B: JTI ops — async HTTP (fast) or thread pool (file fallback)
+        # Step B: Redis JTI ops (inline — ~0.1 ms each)
         parent_claims = pyjwt.decode(subject_token, options={"verify_signature": False})
         parent_jti    = parent_claims.get("jti", "")
 
-        jti_tasks = [_async_jti_register(child_jti, child_exp)]
+        register_jti(child_jti, child_exp)
         if parent_jti:
-            jti_tasks.append(_async_jti_revoke(parent_jti))
-        await asyncio.gather(*jti_tasks)
+            revoke_jti(parent_jti)
 
         print(
             f"\n[SECURE OAuth] /token/exchange  actor={actor}  "
@@ -284,8 +240,8 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
             "status": "ok",
             "server": "oauth",
             "secure": secure,
-            "jti_backend": "http" if _jti_server_url else "file",
-            "jti_url": _jti_server_url or "(file-based)",
+            "jti_backend": "redis",
+            "jti_url": os.getenv("NAC_REDIS_URL", "redis://127.0.0.1:6379/0"),
         }
 
     return app

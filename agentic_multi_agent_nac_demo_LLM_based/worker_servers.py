@@ -225,11 +225,8 @@ def make_worker_app(
             body = json.loads(err_response.body) if hasattr(err_response, "body") else {"error": "forbidden"}
             return [TextContent(type="text", text=json.dumps(body))]
 
-        # Revoke the child token's jti after successful validation.
-        # Done here (inside async def call_tool) so it is safe and correct.
-        # _validate_request is a plain def — await/to_thread cannot go there.
-        # We call revoke_jti directly (synchronous): the FileLock on a local SSD
-        # takes microseconds — spawning a thread costs more than it saves here.
+        # Revoke the child token's jti after successful validation (one-time-use).
+        # Redis SET takes ~0.1 ms — called inline without threading.
         if secure and claims is not None:
             from nac_common import revoke_jti as _revoke
             child_jti = claims.get("jti", "")

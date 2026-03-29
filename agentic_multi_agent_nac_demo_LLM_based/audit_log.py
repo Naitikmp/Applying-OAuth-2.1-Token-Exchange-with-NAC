@@ -148,8 +148,7 @@ def clear_log() -> None:
     """
     Clear the audit log and JTI store at the start of each demo run.
 
-    Resets whichever JTI backend is active — HTTP JTI server (NAC_JTI_URL)
-    or file-based store — so replay tests start from a clean state.
+    Resets the Redis JTI store so replay tests start from a clean state.
     """
     try:
         LOG_FILE.write_text("")

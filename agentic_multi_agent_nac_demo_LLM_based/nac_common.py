@@ -1,39 +1,41 @@
 """
-Shared NAC crypto and validation helpers — v3 (latency-corrected).
+Shared NAC crypto and validation helpers.
 
-Key changes from v2:
-  - JTI store is now an HTTP-based in-memory service (jti_server.py) when
-    NAC_JTI_URL is set.  File-based fallback remains for offline use.
-  - JTI functions read NAC_JTI_URL at call time (not import time), so the
-    env var can be set after module import — critical for multiprocessing spawn
-    where the parent sets NAC_JTI_URL before forking but after importing.
-  - Thread-local httpx.Client per thread for JTI ops (safe + persistent TCP).
-  - clear_jti_store() resets either backend.
-  - _JTI_FILE_POOL kept for backward compat but not used on the hot path
-    when a JTI server is configured.
+JTI store
+---------
+RFC 8693 replay prevention requires every JWT ID (jti) to be tracked across
+processes.  This implementation uses Redis — the industry-standard choice for
+distributed token revocation.
 
-Latency impact
---------------
-File-based (v2):  ~65 ms/op × 8 ops serialised by FileLock  = ~520 ms overhead
-HTTP JTI server:  ~1 ms/op  × 8 ops concurrent in thread pool = ~2 ms overhead
+Redis key layout:
+  nac:jti:<jti>  →  "active"   (SET with EX = token TTL + 60 s)
+  nac:jti:<jti>  →  "revoked"  (SET with EX = 300 s after first use)
+
+Lifecycle:
+  1. OAuth server  → register_jti(jti, exp)  after issuing every token
+  2. OAuth server  → revoke_jti(parent_jti)  after parent token is exchanged
+  3. Worker server → is_jti_revoked(jti)     before accepting a token
+  4. Worker server → revoke_jti(jti)         after accepting (one-time-use)
+
+Connection:
+  Default: redis://127.0.0.1:6379/0
+  Override: set NAC_REDIS_URL environment variable.
+
+Latency at each call site: ~0.1 ms (co-located Redis, binary protocol).
 """
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile as _tempfile
-import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 import jwt
+import redis as _redis_lib
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-
-import concurrent.futures
 
 
 # ── constants ────────────────────────────────────────────────────────────────
@@ -139,148 +141,62 @@ def scope_to_str(value: str | list[str] | None) -> str:
     return " ".join(scope_to_list(value))
 
 
-# ── JTI store — HTTP service or file fallback ─────────────────────────────────
+# ── Redis JTI store ───────────────────────────────────────────────────────────
 #
-# WHY read NAC_JTI_URL at call time (not import time):
-#   multiprocessing.spawn forks a fresh Python interpreter.  The child imports
-#   nac_common early, but the parent may have set NAC_JTI_URL before spawning.
-#   Reading the env var lazily (each call) ensures the child picks it up even
-#   though the module-level code ran before os.environ was populated.
+# Redis is the standard production store for distributed token revocation.
+# Each JTI is stored as a Redis key with an automatic expiry so no manual
+# cleanup is needed.
 #
-# Thread-local httpx.Client:
-#   httpx.Client is not thread-safe for concurrent access from multiple threads.
-#   Using threading.local() gives each thread its own client with its own
-#   connection pool — safe and persistent (TCP connections reused within a thread).
+# Key schema:  nac:jti:<jti>
+#   value="active"   TTL=token_lifetime+60s  → registered, not yet spent
+#   value="revoked"  TTL=300s                → spent (one-time-use enforced)
+#
+# is_jti_revoked() returns True only when the value is "revoked".
+# An absent key (expired or never registered) returns False — the JWT
+# signature check is the primary guard against forged tokens.
 
-_jti_thread_local = threading.local()
+_NAC_REDIS_URL  = os.getenv("NAC_REDIS_URL", "redis://127.0.0.1:6379/0")
+_JTI_PREFIX     = "nac:jti:"
+_JTI_REVOKE_TTL = 300   # seconds to retain revocation records
+
+_redis_client: "_redis_lib.Redis | None" = None
 
 
-def _get_jti_url() -> str:
-    """Return the JTI server URL if configured, else empty string."""
-    return os.getenv("NAC_JTI_URL", "")
-
-
-def _get_jti_http_client():
-    """Return a thread-local persistent httpx.Client for the JTI server."""
-    import httpx as _httpx
-    url = _get_jti_url()
-    existing_url = getattr(_jti_thread_local, "base_url", None)
-    if existing_url != url or not hasattr(_jti_thread_local, "client"):
-        _jti_thread_local.base_url = url
-        _jti_thread_local.client   = _httpx.Client(
-            base_url = url,
-            timeout  = 3.0,
+def _get_redis() -> "_redis_lib.Redis":
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = _redis_lib.from_url(
+            _NAC_REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=2,
         )
-    return _jti_thread_local.client
-
-
-# ── file-based JTI store (fallback when no JTI server) ───────────────────────
-
-_JTI_STORE_PATH = Path(os.getenv("NAC_JTI_STORE", str(Path(_tempfile.gettempdir()) / "nac_jti_store.json")))
-_JTI_LOCK_PATH  = Path(str(_JTI_STORE_PATH) + ".lock")
-
-# Pre-warmed thread pool — kept for backward compat and for oauth_server's
-# fallback path.  Not used on the hot path when a JTI server is configured.
-_JTI_FILE_POOL = concurrent.futures.ThreadPoolExecutor(
-    max_workers=8, thread_name_prefix="nac_jti"
-)
-
-
-def _read_jti_store() -> dict[str, float]:
-    try:
-        from filelock import FileLock
-        with FileLock(_JTI_LOCK_PATH, timeout=5):
-            return json.loads(_JTI_STORE_PATH.read_text())
-    except Exception:
-        return {}
-
-
-def _write_jti_store(store: dict[str, float]) -> None:
-    try:
-        from filelock import FileLock
-        with FileLock(_JTI_LOCK_PATH, timeout=5):
-            _JTI_STORE_PATH.write_text(json.dumps(store))
-    except Exception:
-        pass
+    return _redis_client
 
 
 # ── JTI public API ────────────────────────────────────────────────────────────
 
 def register_jti(jti: str, exp: float) -> None:
-    """Record a jti as issued.  Uses HTTP JTI server if NAC_JTI_URL is set."""
-    url = _get_jti_url()
-    if url:
-        try:
-            _get_jti_http_client().post("/register", params={"jti": jti, "exp": exp})
-        except Exception as exc:
-            # Non-fatal: fall through to file-based backup
-            print(f"[nac_common] JTI server register failed ({exc}); falling back to file store")
-            _file_register_jti(jti, exp)
-    else:
-        _file_register_jti(jti, exp)
-
-
-def _file_register_jti(jti: str, exp: float) -> None:
-    store = _read_jti_store()
-    now = time.time()
-    cleanup_horizon = now - (CHILD_TOKEN_TTL + 60)
-    store = {k: v for k, v in store.items() if v > cleanup_horizon}
-    store[jti] = exp
-    _write_jti_store(store)
+    """Record a freshly issued JTI in Redis with an automatic expiry."""
+    ttl = max(1, int(exp - time.time()) + 60)
+    _get_redis().set(f"{_JTI_PREFIX}{jti}", "active", ex=ttl)
 
 
 def revoke_jti(jti: str) -> None:
-    """Mark a jti as spent.  Uses HTTP JTI server if NAC_JTI_URL is set."""
-    url = _get_jti_url()
-    if url:
-        try:
-            _get_jti_http_client().post("/revoke", params={"jti": jti})
-        except Exception as exc:
-            print(f"[nac_common] JTI server revoke failed ({exc}); falling back to file store")
-            _file_revoke_jti(jti)
-    else:
-        _file_revoke_jti(jti)
-
-
-def _file_revoke_jti(jti: str) -> None:
-    store = _read_jti_store()
-    store[jti] = time.time()   # Bug R3 fix: store current time, NOT 0.0
-    _write_jti_store(store)
+    """Mark a JTI as spent.  Overwrites any prior value; key expires in 300 s."""
+    _get_redis().set(f"{_JTI_PREFIX}{jti}", "revoked", ex=_JTI_REVOKE_TTL)
 
 
 def is_jti_revoked(jti: str) -> bool:
-    """Return True if jti has been revoked.  Uses HTTP JTI server if NAC_JTI_URL is set."""
-    url = _get_jti_url()
-    if url:
-        try:
-            r = _get_jti_http_client().get(f"/check/{jti}")
-            return bool(r.json().get("revoked", False))
-        except Exception as exc:
-            print(f"[nac_common] JTI server check failed ({exc}); falling back to file store")
-    # File-based fallback
-    store = _read_jti_store()
-    if jti not in store:
-        return False
-    return store[jti] <= time.time()
+    """Return True if the JTI has been revoked (value == 'revoked')."""
+    return _get_redis().get(f"{_JTI_PREFIX}{jti}") == "revoked"
 
 
 def clear_jti_store() -> None:
-    """
-    Clear all JTI records — called at the start of each demo run.
-    Resets whichever backend is active (HTTP server or file).
-    """
-    url = _get_jti_url()
-    if url:
-        try:
-            _get_jti_http_client().delete("/clear")
-            return
-        except Exception:
-            pass
-    # File fallback
-    try:
-        _JTI_STORE_PATH.write_text("{}")
-    except Exception:
-        pass
+    """Delete all nac:jti:* keys — called at the start of each demo/eval run."""
+    r = _get_redis()
+    keys = r.keys(f"{_JTI_PREFIX}*")
+    if keys:
+        r.delete(*keys)
 
 
 # ── token issuance (auth server only) ────────────────────────────────────────

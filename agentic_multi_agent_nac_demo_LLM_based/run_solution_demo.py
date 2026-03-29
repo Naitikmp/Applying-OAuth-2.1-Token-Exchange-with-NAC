@@ -31,6 +31,19 @@ from oauth_server     import make_oauth_app
 from worker_servers   import build_calendar_app, build_docs_app, build_comms_app, build_external_api_app
 import audit_log
 
+
+def _check_redis() -> None:
+    import redis
+    url = os.getenv("NAC_REDIS_URL", "redis://127.0.0.1:6379/0")
+    try:
+        redis.from_url(url, socket_connect_timeout=2).ping()
+        print(f"  Redis: connected at {url}")
+    except Exception as exc:
+        print(f"\n[ERROR] Cannot connect to Redis at {url}: {exc}")
+        print("  Start Redis first:  docker run -d -p 6379:6379 redis:7-alpine")
+        raise SystemExit(1)
+
+
 BASE           = 9300
 OAUTH_PORT     = BASE
 ASSISTANT_PORT = BASE + 1
@@ -92,6 +105,7 @@ async def wait_ready(ports: list[int], timeout: int = 20) -> None:
 
 
 async def main():
+    _check_redis()
     audit_log.clear_log()
     callback_url = f"http://127.0.0.1:{ASSISTANT_PORT}/oauth/callback"
     worker_urls  = {
