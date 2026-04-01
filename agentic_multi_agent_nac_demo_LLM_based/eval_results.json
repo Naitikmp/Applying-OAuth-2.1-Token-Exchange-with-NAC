@@ -85,24 +85,24 @@
     {
       "mode": "baseline",
       "n": 30,
-      "mean_ms": 112.9,
-      "p50_ms": 108.67,
-      "p95_ms": 142.84,
-      "p99_ms": 150.15,
-      "min_ms": 105.21,
-      "max_ms": 150.15,
-      "stdev_ms": 11.5
+      "mean_ms": 114.88,
+      "p50_ms": 111.61,
+      "p95_ms": 144.85,
+      "p99_ms": 161.19,
+      "min_ms": 107.48,
+      "max_ms": 161.19,
+      "stdev_ms": 11.25
     },
     {
       "mode": "secure",
       "n": 30,
-      "mean_ms": 155.43,
-      "p50_ms": 151.66,
-      "p95_ms": 185.59,
-      "p99_ms": 188.51,
-      "min_ms": 145.67,
-      "max_ms": 188.51,
-      "stdev_ms": 10.75
+      "mean_ms": 158.0,
+      "p50_ms": 152.19,
+      "p95_ms": 188.0,
+      "p99_ms": 188.04,
+      "min_ms": 145.25,
+      "max_ms": 188.04,
+      "stdev_ms": 13.21
     }
   ],
   "token_sizes": [
@@ -129,6 +129,26 @@
       "mode": "secure",
       "bytes": 792,
       "chain_depth": 2
+    }
+  ],
+  "hop_costs": [
+    {
+      "hop": 1,
+      "mean_ms": 2.15,
+      "stdev_ms": 0.24,
+      "n": 30
+    },
+    {
+      "hop": 2,
+      "mean_ms": 4.27,
+      "stdev_ms": 0.36,
+      "n": 30
+    },
+    {
+      "hop": 3,
+      "mean_ms": 6.44,
+      "stdev_ms": 0.44,
+      "n": 30
     }
   ]
 }

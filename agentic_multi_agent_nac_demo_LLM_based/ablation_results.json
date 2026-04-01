@@ -1,0 +1,196 @@
+{
+  "ablation": [
+    {
+      "config": "Baseline",
+      "enforce_audience": false,
+      "enforce_scope": false,
+      "enforce_jti": false,
+      "results": {
+        "A1 Scope escalation": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A2 Lateral movement": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A3 Token replay": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A4 Identity attribution": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        }
+      }
+    },
+    {
+      "config": "Audience only",
+      "enforce_audience": true,
+      "enforce_scope": false,
+      "enforce_jti": false,
+      "results": {
+        "A1 Scope escalation": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A2 Lateral movement": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A3 Token replay": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A4 Identity attribution": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        }
+      }
+    },
+    {
+      "config": "Scope only",
+      "enforce_audience": false,
+      "enforce_scope": true,
+      "enforce_jti": false,
+      "results": {
+        "A1 Scope escalation": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A2 Lateral movement": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A3 Token replay": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A4 Identity attribution": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        }
+      }
+    },
+    {
+      "config": "JTI only",
+      "enforce_audience": false,
+      "enforce_scope": false,
+      "enforce_jti": true,
+      "results": {
+        "A1 Scope escalation": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A2 Lateral movement": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A3 Token replay": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A4 Identity attribution": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        }
+      }
+    },
+    {
+      "config": "Audience + Scope",
+      "enforce_audience": true,
+      "enforce_scope": true,
+      "enforce_jti": false,
+      "results": {
+        "A1 Scope escalation": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A2 Lateral movement": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A3 Token replay": {
+          "block_rate": 0.0,
+          "blocked": 0,
+          "successes": 30,
+          "trials": 30
+        },
+        "A4 Identity attribution": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        }
+      }
+    },
+    {
+      "config": "Full NAC",
+      "enforce_audience": true,
+      "enforce_scope": true,
+      "enforce_jti": true,
+      "results": {
+        "A1 Scope escalation": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A2 Lateral movement": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A3 Token replay": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        },
+        "A4 Identity attribution": {
+          "block_rate": 1.0,
+          "blocked": 30,
+          "successes": 0,
+          "trials": 30
+        }
+      }
+    }
+  ]
+}

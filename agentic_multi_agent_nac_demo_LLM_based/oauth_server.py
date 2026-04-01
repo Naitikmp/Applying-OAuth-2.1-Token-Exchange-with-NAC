@@ -21,7 +21,7 @@ import audit_log
 from nac_common import (
     RFC8693_AT, RFC8693_GRANT, RFC8693_JWT,
     ROOT_CLIENT_ID, CHILD_TOKEN_TTL,
-    make_child_token,
+    make_child_token, chain_depth as _chain_depth,
     get_public_key, get_signing_key, issue_root_token,
     is_jti_revoked, register_jti, revoke_jti, scope_to_list,
 )
@@ -209,7 +209,7 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
             new_audience = audience,
             new_scope    = new_scope,
             mode         = mode,
-            chain_depth  = len(new_scope),
+            chain_depth  = _chain_depth(subject_token) + 1,
         )
 
         return {

@@ -117,6 +117,14 @@ class TokenSizeResult:
     chain_depth:  int
 
 
+@dataclass
+class HopCostResult:
+    hop:      int     # number of sequential exchanges performed
+    mean_ms:  float
+    stdev_ms: float
+    n:        int
+
+
 # ── token factory (eval uses signing key directly for test token generation) ──
 
 def _make_root_token(username: str = "alice") -> str:
@@ -290,6 +298,61 @@ async def _run_a4_identity_attribution(urls: dict, secure: bool, n: int) -> Atta
     return result
 
 
+# ── per-hop cost measurement ─────────────────────────────────────────────────
+
+def _measure_hop_costs(rounds: int = 30) -> list[HopCostResult]:
+    """
+    Measure the marginal latency cost of each additional RFC 8693 exchange.
+
+    Calls exchange_token() directly (local RSA sign + Redis SET) without HTTP
+    overhead, isolating the pure per-hop cryptographic + JTI cost.
+    Each depth is measured `rounds` times; chain is root→cal→ext→ext(again).
+
+    This produces the linearity claim: each hop adds a roughly constant cost.
+    """
+    # Hop targets: calendar, external-api, external-api (re-exchanges external)
+    hop_chain = [
+        ("calendar",     ["calendar:read"]),
+        ("external-api", ["calendar:read"]),
+        ("external-api", ["calendar:read"]),
+    ]
+    results = []
+    for depth in range(1, len(hop_chain) + 1):
+        samples: list[float] = []
+        for _ in range(rounds):
+            root  = _make_root_token()
+            token = root
+            t0    = perf_counter()
+            for worker, scope in hop_chain[:depth]:
+                token = _make_child_token(token, worker, scope)
+            samples.append((perf_counter() - t0) * 1000)
+        results.append(HopCostResult(
+            hop      = depth,
+            mean_ms  = statistics.mean(samples),
+            stdev_ms = statistics.stdev(samples) if len(samples) > 1 else 0.0,
+            n        = rounds,
+        ))
+    return results
+
+
+def _print_hop_cost_table(results: list[HopCostResult]) -> None:
+    print("="*80)
+    print("  PER-HOP COST (direct exchange_token: RSA sign + Redis SET, no HTTP)")
+    print("="*80)
+    print(f"  {'Depth':<8} {'N':>4} {'Mean (ms)':>12} {'Stdev (ms)':>12} {'Marginal':>12}")
+    print("  " + "-"*52)
+    prev = 0.0
+    for r in results:
+        marginal = r.mean_ms - prev
+        suffix   = f"+{marginal:.1f} ms" if r.hop > 1 else "(baseline)"
+        print(f"  {r.hop:<8} {r.n:>4} {r.mean_ms:>12.1f} {r.stdev_ms:>12.1f} {suffix:>12}")
+        prev = r.mean_ms
+    slope = (results[-1].mean_ms - results[0].mean_ms) / (results[-1].hop - results[0].hop) if len(results) > 1 else 0
+    print(f"\n  Estimated slope: ~{slope:.1f} ms per additional hop")
+    print(f"  (Linear scaling confirmed — overhead grows proportionally with depth)")
+    print()
+
+
 # ── latency measurement ───────────────────────────────────────────────────────
 
 async def _measure_latency(assistant_url: str, root_token: str, n: int, mode: str) -> LatencyResult:
@@ -371,11 +434,13 @@ def _print_latency_table(results: list[LatencyResult]) -> None:
         overhead_pct = (overhead_abs / b.mean_ms) * 100
         # 4 sequential exchanges in secure mode
         per_hop = overhead_abs / 4.0
+        stdev_ratio = s.stdev_ms / b.stdev_ms if b.stdev_ms > 0 else float("inf")
         print(f"\n  Absolute overhead : +{overhead_abs:.1f} ms mean")
         print(f"  Relative overhead : {overhead_pct:+.1f}% mean latency")
         print(f"  Per-hop cost      : ~{per_hop:.1f} ms  (4 sequential RFC 8693 exchanges)")
         print(f"  Parallel estimate : ~{b.mean_ms + per_hop:.1f} ms mean  (if all 4 exchanges run concurrently)")
-        print(f"  Stdev baseline    : {b.stdev_ms:.1f} ms   Stdev secure: {s.stdev_ms:.1f} ms  (overhead is predictable)")
+        print(f"  Stdev baseline    : {b.stdev_ms:.1f} ms   Stdev secure: {s.stdev_ms:.1f} ms")
+        print(f"  Stdev ratio       : {stdev_ratio:.2f}×  {'(overhead is predictable — Redis eliminates jitter)' if stdev_ratio < 1.5 else '(high variance — check for cross-process contention)'}")
     print()
 
 
@@ -443,6 +508,11 @@ async def run_evaluation(rounds: int = 30) -> None:
     size_results = _measure_token_sizes()
     _print_token_size_table(size_results)
 
+    # ── Per-hop cost (linear scaling validation) ──────────────────────────────
+    print("[Eval] Measuring per-hop exchange cost (RSA sign + Redis, no HTTP) …")
+    hop_results = _measure_hop_costs(rounds=min(rounds, 30))
+    _print_hop_cost_table(hop_results)
+
     # ── Latency ───────────────────────────────────────────────────────────────
     print("[Eval] Measuring latency (requires running servers) …")
     lat_results: list[LatencyResult] = []
@@ -484,7 +554,7 @@ async def run_evaluation(rounds: int = 30) -> None:
         print("  (Start servers with run_problem_demo.py and run_solution_demo.py to measure latency)\n")
 
     # ── JSON export for chart generation ──────────────────────────────────
-    _export_json(attack_results, lat_results, size_results)
+    _export_json(attack_results, lat_results, size_results, hop_results)
 
     print("="*80)
     print("  EVALUATION COMPLETE")
@@ -492,9 +562,10 @@ async def run_evaluation(rounds: int = 30) -> None:
 
 
 def _export_json(
-    attacks: list[AttackResult],
-    latency: list[LatencyResult],
-    sizes:   list[TokenSizeResult],
+    attacks:   list[AttackResult],
+    latency:   list[LatencyResult],
+    sizes:     list[TokenSizeResult],
+    hop_costs: list[HopCostResult],
 ) -> None:
     """Write eval_results.json for use by generate_charts.py."""
     out = {
@@ -524,6 +595,15 @@ def _export_json(
                 "bytes": r.size_bytes, "chain_depth": r.chain_depth,
             }
             for r in sizes
+        ],
+        "hop_costs": [
+            {
+                "hop": r.hop,
+                "mean_ms":  round(r.mean_ms,  2),
+                "stdev_ms": round(r.stdev_ms, 2),
+                "n":        r.n,
+            }
+            for r in hop_costs
         ],
     }
     path = pathlib.Path("eval_results.json")

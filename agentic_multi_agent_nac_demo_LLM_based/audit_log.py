@@ -1,10 +1,11 @@
 """
-Structured audit logger for NAC demo.
+Structured audit logger for the NAC demo.
 
-Change from v1:
-  - clear_log() also resets the JTI store (HTTP server or file-based),
-    so each demo run starts with a clean state in both the log and the
-    JTI revocation registry.
+Writes one JSON line per event to a rotating log file (NAC_LOG_FILE env var).
+Also clears the Redis JTI store on clear_log() so replay tests start clean.
+
+Event types: TOKEN_ISSUED, TOKEN_EXCHANGED, TOKEN_VALIDATED, TOKEN_REJECTED,
+             TOOL_CALLED, TOOL_BLOCKED, ATTACK_ATTEMPT
 """
 
 from __future__ import annotations
@@ -155,7 +156,6 @@ def clear_log() -> None:
     except Exception:
         pass
 
-    # Reset JTI store (both HTTP-server and file-based paths)
     try:
         from nac_common import clear_jti_store
         clear_jti_store()
