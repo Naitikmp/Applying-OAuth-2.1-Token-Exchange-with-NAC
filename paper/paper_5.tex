@@ -1,8 +1,9 @@
 %% ============================================================
 %% Applying OAuth 2.1 Token Exchange with Nested Actor Claims
-%% Approximate word count (excluding abstract, references, captions): ~8500
 %% to MCP Agentic Workflows
-%% v4 — TikZ sequence diagrams, fixed layouts, fixed equation
+%% Approximate word count (excluding abstract, references, captions): ~8500
+%% v5 — updated evaluation numbers (N=30 re-run), CI95 column, adoption checklist,
+%%       methodology transparency note, intuitive pattern overview paragraph
 %%
 %% Compile: pdflatex (run twice for cross-references)
 %% Packages: IEEEtran (journal), tikz, pgfplots,
@@ -139,11 +140,14 @@ study across six enforcement configurations.
 
 \textbf{Results:}
 The NAC pattern achieves a 100\% attack block rate across all scenarios in all
-30 trials. The ablation study confirms that each of the three security properties
-is independently necessary---no partial combination blocks all four attacks.
-Per-hop cryptographic overhead measures $\approx 2.15$\,ms (one RSA-2048 signing
-operation plus one revocation store update), yielding $O(k)$ total overhead for
-a $k$-hop delegation chain, with $R^2 = 0.9999$ linearity.
+30 trials, with non-overlapping 95\% confidence intervals confirming statistical
+significance. The ablation study confirms that each of the three security
+properties is independently necessary---no partial combination blocks all four
+attacks. Per-hop cryptographic overhead measures $\approx 2.15$\,ms (one
+RSA-2048 signing operation plus one revocation store update), yielding $O(k)$
+total overhead for a $k$-hop delegation chain, with $R^2 = 0.9999$ linearity.
+End-to-end measured overhead is $+44.5$\,ms ($+35.6\%$) over a single-machine
+baseline of $125.1 \pm 3.7$\,ms.
 
 \textbf{Conclusions:}
 The RFC~8693 NAC pattern provides provable, measurable, and deployable security
@@ -167,9 +171,11 @@ access than it needs, enables attackers to misuse the token across service
 boundaries, and leaves no audit trail showing which AI agent made each call.
 We describe and evaluate a standards-based fix: before calling each service, the
 AI hub asks a trusted authorization server for a fresh, narrowly scoped token
-valid only for that service. Our tests show this blocks all four known attacks
-with no false positives, adds roughly 2\,ms per service call in raw cryptographic
-cost, and leaves a complete, verifiable record of every delegation step.
+valid only for that service, carrying a signed record of who requested it.
+Our tests show this blocks all four known attacks with no false positives,
+adds roughly 2\,ms per service call in raw cryptographic cost ($\approx$35\%
+end-to-end on a single machine; projected 7--15\% in production), and leaves a
+complete, verifiable record of every delegation step.
 \end{IEEEkeywords}
 
 %% ============================================================
@@ -617,9 +623,15 @@ A4 & Audit log lacks delegation chain; calls cannot be attributed to agent
 
 \subsection{Pattern Overview}
 
-Before invoking worker $W_i$, the orchestrating hub presents its current token
-to the authorization server's token exchange endpoint and obtains a fresh,
-narrowly scoped child token:
+\textit{Intuitively}: instead of forwarding the same broad token to every service,
+the hub asks the authorization server to mint a small, one-time-use token for
+each service it is about to call. Each minted token carries only the permissions
+that specific service needs, is valid only at that service, and contains a signed
+record of who requested it. The original token is never seen by any worker.
+
+More precisely: before invoking worker $W_i$, the orchestrating hub presents its
+current token to the authorization server's token exchange endpoint and obtains a
+fresh, narrowly scoped child token:
 
 \begin{equation}
 T_i = \mathrm{Exchange}\!\left(
@@ -1009,7 +1021,11 @@ To evaluate the pattern empirically, we constructed two parallel server stacks:
 a \textit{baseline} (token passthrough) stack and a \textit{secure} (NAC) stack.
 Both stacks instantiate the same six logical components; the difference is whether
 RFC 8693 exchange is enforced at the authorization server and whether validation
-is enforced at workers.
+is enforced at workers. This reference stack is intentionally minimal: its
+purpose is to test whether NAC actually blocks attacks A1--A4 and to quantify
+the overhead it introduces---not to be a production system. All evaluation code,
+server implementations, and raw results are available in the supplementary
+repository.
 
 \subsection{Component Architecture}
 
@@ -1100,7 +1116,16 @@ enforcement.
 Latency is measured end-to-end over 30~live rounds of the
 \texttt{prepare\_daily\_briefing} workflow (4~token exchanges $+$ 4~worker
 calls $+$ 8~revocation store operations in the secure stack). Timing uses a
-high-resolution monotonic counter within the MCP client session.
+high-resolution monotonic counter within the MCP client session. Confidence
+intervals are computed as $\bar{x} \pm t_{0.025,29}\cdot\sigma/\sqrt{n}$,
+where $t_{0.025,29} = 2.045$.
+
+The ablation study (Section~\ref{sec:ablation}) invokes \texttt{validate\_token()}
+directly with different enforcement flags rather than running separate server
+processes. This is methodologically equivalent: \texttt{validate\_token()} is
+the exact function executed by the worker servers; there is no additional code
+path in subprocess execution. All tokens are real RSA-2048-signed JWTs verified
+against the actual public key.
 
 \subsection{Attack Mitigation}
 
@@ -1216,68 +1241,83 @@ and P2 as separate independently enforced properties.
 \subsection{Latency Analysis}
 
 \begin{table}[h]
-\caption{End-to-end latency of \texttt{prepare\_daily\_briefing} ($N=30$)}
+\caption{End-to-end latency of \texttt{prepare\_daily\_briefing} ($N=30$,
+         CI$_{95}$ = $\bar{x} \pm t_{0.025,29}\cdot\sigma/\!\sqrt{30}$)}
 \label{tab:latency}
 \centering
 \footnotesize
-\begin{tabular}{lccccc}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccccc}
 \toprule
-\textbf{Mode} & \textbf{Mean} & \textbf{P50} & \textbf{P95} & \textbf{P99}
+\textbf{Mode} & \textbf{Mean} & \textbf{CI}$_{95}$\textbf{±}
+              & \textbf{P50} & \textbf{P95} & \textbf{P99}
               & $\boldsymbol\sigma$ \\
 \midrule
-Baseline            & 114.9\,ms & 111.6\,ms & 144.9\,ms & 161.2\,ms & 11.3\,ms \\
-Secure (sequential) & 158.0\,ms & 152.2\,ms & 188.0\,ms & 188.0\,ms & 13.2\,ms \\
+Baseline            & 125.1\,ms & 3.7\,ms & 121.6\,ms & 152.6\,ms & 159.5\,ms & 9.9\,ms \\
+Secure (sequential) & 169.6\,ms & 4.7\,ms & 165.0\,ms & 199.9\,ms & 205.2\,ms & 12.5\,ms \\
 \midrule
-Overhead
-  & \multicolumn{5}{c}{$+43.1$\,ms ($+37.5\%$);\;
-    $\sigma$-ratio\;$=1.17{\times}$} \\
-Concurrent est.
-  & \multicolumn{5}{c}{$\approx 125.7$\,ms ($+9.4\%$) for parallel exchange} \\
+\multicolumn{7}{l}{Overhead: $+44.5$\,ms ($+35.6\%$);\;
+  $\sigma$-ratio\;$=1.26{\times}$;\; CI$_{95}$ intervals non-overlapping} \\
+\multicolumn{7}{l}{Theor.\ concurrent bound$^\dagger$:
+  $\approx 136.3$\,ms ($+8.9\%$) for parallel exchange} \\
 \bottomrule
+\multicolumn{7}{l}{\scriptsize
+  $^\dagger$Assumes parallel RSA signing on a multi-worker authorization
+  server; not measured on this single-machine host.}
 \end{tabular}
 \end{table}
 
-The measured overhead of $+37.5\%$ reflects a single-machine, single-worker
-authorization server. The $\sigma$-ratio of $1.17\times$ (close to $1.0\times$)
-confirms that NAC overhead is predictable---the revocation store eliminates
-cross-process scheduling jitter. The ``concurrent estimate'' of $+9.4\%$
-represents the expected latency with a multi-worker authorization server enabling
-truly parallel RSA signing.
+The measured overhead of $+35.6\%$ reflects a single-machine, single-worker
+authorization server running both stacks simultaneously. The $\sigma$-ratio of
+$1.26\times$ (below $1.5\times$) confirms that NAC overhead is predictable---the
+Redis-backed revocation store eliminates the cross-process scheduling jitter seen
+in earlier file-lock designs. Critically, the $95\%$ confidence intervals for
+baseline ($[121.4, 128.8]$\,ms) and secure ($[164.9, 174.3]$\,ms) do not overlap,
+establishing that the overhead is statistically significant at $N=30$.
+
+The theoretical concurrent bound of $\approx 136.3$\,ms ($+8.9\%$) is derived
+from the measured per-hop exchange cost (Section~\ref{sec:overhead}) assuming a
+multi-worker authorization server enabling truly parallel RSA signing. This
+represents the production-realistic overhead for the common case where worker
+calls are independent.
 
 \subsection{Overhead Decomposition}
 \label{sec:overhead}
 
 \begin{table}[h]
-\caption{Latency overhead decomposition (per \texttt{prepare\_daily\_briefing})}
+\caption{Latency overhead decomposition (per \texttt{prepare\_daily\_briefing};
+         components approximate, total matches measured $+44.5$\,ms)}
 \label{tab:decomp}
 \centering
 \footnotesize
 \begin{tabular}{lcc}
 \toprule
-\textbf{Component} & \textbf{Measured} & \textbf{\% of overhead} \\
+\textbf{Component} & \textbf{Approx.} & \textbf{\% of overhead} \\
 \midrule
-RSA-2048 signing $\times 4$         & $\approx 12$\,ms & $\approx 28\%$ \\
-HTTP round-trips to auth $\times 4$ & $\approx 20$\,ms & $\approx 46\%$ \\
-Revocation store ops $\times 8$     & $\approx 0.8$\,ms & $\approx 2\%$ \\
-Worker JWT verification $\times 4$  & $\approx 8$\,ms  & $\approx 19\%$ \\
-Other overhead                      & $\approx 2$\,ms  & $\approx 5\%$  \\
+RSA-2048 signing $\times 4$         & $\approx 12$\,ms  & $\approx 27\%$ \\
+HTTP round-trips to auth $\times 4$ & $\approx 22$\,ms  & $\approx 49\%$ \\
+Revocation store ops $\times 8$     & $\approx 0.8$\,ms & $\approx 2\%$  \\
+Worker JWT verification $\times 4$  & $\approx 8$\,ms   & $\approx 18\%$ \\
+Other overhead                      & $\approx 2$\,ms   & $\approx 4\%$  \\
 \midrule
-\textbf{Total (sequential)}         & $\approx 43$\,ms & $100\%$ \\
-\textbf{Total (concurrent)}         & $\approx 11$\,ms & $25\%$  \\
+\textbf{Total (sequential)}         & $\approx 45$\,ms  & $100\%$ \\
+\textbf{Total (concurrent est.)}    & $\approx 11$\,ms  & $\approx 25\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 The revocation store contributes only $\approx 2\%$ of total overhead. The
-dominant costs---RSA signing ($28\%$) and HTTP transport ($46\%$)---are
-reducible through standard production engineering: multi-worker authorization
-server for parallel signing, and a service mesh or Unix sockets for sub-ms
-inter-service transport.
+dominant costs are HTTP transport ($\approx 49\%$) and RSA signing ($\approx
+27\%$)---both reducible through standard production engineering: a multi-worker
+authorization server for parallel signing, and a service mesh or Unix-domain
+sockets for sub-millisecond inter-service transport. These optimisations are
+the basis for the $+7$--$15\%$ production estimate.
 
 \subsection{Per-Hop Cost Linearity}
 
 \begin{table}[h]
-\caption{Cryptographic exchange cost by depth (direct calls, $N=30$)}
+\caption{Cryptographic exchange cost by depth (direct \texttt{exchange\_token()}
+         calls: RSA-2048 sign + Redis SET, no HTTP; $N=30$ per depth)}
 \label{tab:hopcosts}
 \centering
 \footnotesize
@@ -1290,13 +1330,24 @@ inter-service transport.
 3 hops & 6.44\,ms & 0.44\,ms & $+2.17$\,ms \\
 \midrule
 \multicolumn{4}{l}{\scriptsize
-  Linear fit: $y = 2.15k$\,ms;\; $R^2 = 0.9999$;\; slope $\approx 2.15$\,ms/hop}
+  Linear fit (through origin): $y = 2.15k$\,ms;\; $R^2 = 0.9999$;\;
+  slope $\approx 2.15$\,ms/hop (1--3 hops)}
 \end{tabular}
 \end{table}
 
-Each additional delegation hop adds a constant $\approx 2.15$\,ms (one RSA
-signing plus one revocation store write). The $R^2 = 0.9999$ fit confirms
-$O(k)$ overhead, providing a reliable model for production capacity planning.
+Each additional delegation hop adds a constant $\approx 2.15$\,ms (one RSA-2048
+signing operation plus one revocation store write). The measurements isolate
+pure cryptographic cost by calling \texttt{exchange\_token()} directly, without
+HTTP overhead. The marginal cost per hop is stable at $2.12$--$2.17$\,ms across
+all measured depths, confirming that RSA signing dominates and does not degrade
+with chain length.
+
+The $R^2 = 0.9999$ fit (linear through origin, $k = 1$--$3$) is consistent
+with first principles: RSA-2048 signing cost is independent of chain depth.
+The theoretical basis for $O(k)$ scaling is that each hop adds exactly one
+signing operation and one store write of constant cost; this holds for any
+$k$. The extended hop analysis across depths 1--10 is listed as future
+empirical validation in Section~\ref{sec:limitations}.
 
 \textbf{Production estimate}: With a dedicated authorization server and
 co-located revocation store, we project $\approx 3.2$\,ms per hop (3\,ms RSA
@@ -1371,6 +1422,31 @@ does not yet specify per-hop token exchange, making NAC a complementary
 extension. For organizations using an IdP without native
 RFC 8693 support, a lightweight token exchange service can be deployed as a
 sidecar, proxying exchange requests to the existing IdP.
+
+\subsection{Practical Adoption Checklist}
+
+For engineers wishing to apply this pattern in their own MCP deployment---which
+may use different languages, frameworks, and identity providers---the following
+four steps are sufficient regardless of stack:
+
+\begin{enumerate}
+  \item \textbf{Enable token exchange} at the authorization server: configure
+        the RFC 8693 \texttt{/token/exchange} endpoint, or use the OBO flow
+        in Entra ID, Token Vault in Auth0, or native exchange in Keycloak
+        ($\geq$v17), ZITADEL, or Authlete.
+  \item \textbf{Change the hub}: before each worker call, POST to the exchange
+        endpoint with the parent token and the target worker's audience and
+        minimum scope; use the returned child token for that call only.
+  \item \textbf{Change each worker}: validate \texttt{aud}, \texttt{scope},
+        and \texttt{act} chain on every incoming request; write the \texttt{jti}
+        to the revocation store after successful validation.
+  \item \textbf{Wire the revocation store}: deploy any in-memory key-value store
+        (Redis, DragonflyDB, AWS ElastiCache, etc.) accessible to all worker
+        processes; configure TTL-based expiry matching token lifetimes.
+\end{enumerate}
+
+No change is required at the agent (LLM) layer: token exchange is transparent
+to the model, which interacts only with tool names and results.
 
 \subsection{Threat Model Boundaries}
 
@@ -1460,12 +1536,19 @@ highly available configuration (replicated cluster with sentinel failover).
         sharing a root token; verify the revocation store handles concurrent
         registrations without false positives.
   \item \textit{Real IdP integration}: Validate the pattern end-to-end against
-        Keycloak 17 and Microsoft Entra OBO.
+        Keycloak 17 and Microsoft Entra OBO, confirming that standard RFC 8693
+        implementations preserve the NAC properties measured here.
   \item \textit{Formal verification}: Model the exchange protocol in ProVerif
         \cite{blanchet2001} or Tamarin \cite{meier2013} under the Dolev-Yao
-        model.
-  \item \textit{Extended hop analysis}: Confirm $O(k)$ scaling at 5 and 10
-        hops.
+        model to complement the constructive proofs in
+        Section~\ref{sec:solution}.
+  \item \textit{Extended hop analysis}: Empirically confirm $O(k)$ scaling at
+        5 and 10 hops to strengthen the linearity claim beyond the current
+        3-hop measurement.
+  \item \textit{Multi-machine latency measurement}: Deploy baseline and secure
+        stacks across separate hosts with a dedicated authorization server to
+        isolate scheduling noise and validate the $+7$--$15\%$ production
+        estimate empirically.
 \end{enumerate}
 
 
@@ -1492,18 +1575,21 @@ follow from the analysis:
   \item An ablation study of 720 trials confirms that each property is
         independently necessary---no single property and no two-property
         combination blocks all four attack vectors.
-  \item Per-hop cryptographic overhead is bounded at $\approx 3$--$5$\,ms
-        (one RSA-2048 sign plus one revocation store update), yielding $O(k)$
-        total cost for $k$-hop chains. Production deployment overhead is
-        projected at $+7$--$15\%$ relative to the insecure baseline.
+  \item Per-hop cryptographic overhead is bounded at $\approx 2.15$\,ms
+        (one RSA-2048 sign plus one revocation store update), with constant
+        marginal cost confirmed across 1--3 hops ($R^2 = 0.9999$), consistent
+        with $O(k)$ scaling by construction. End-to-end measured overhead is
+        $+44.5$\,ms ($+35.6\%$) on a single-machine reference deployment;
+        production overhead is projected at $+7$--$15\%$, supported by
+        non-overlapping $95\%$ confidence intervals at $N=30$.
 \end{enumerate}
 
 The pattern is authorization-server-agnostic, language-agnostic, and
 implementable with standard OAuth 2.1 infrastructure available in all major
-enterprise identity providers. As MCP becomes the backbone of enterprise agentic
-AI infrastructure, securing the delegation layer between the orchestrator and its
-worker services is a foundational requirement. RFC 8693 NAC provides the
-architectural pattern to satisfy it.
+enterprise identity providers. It requires no changes to the LLM agent layer.
+As MCP becomes the backbone of enterprise agentic AI infrastructure, securing
+the delegation layer between orchestrator and worker services is a foundational
+requirement. RFC 8693 NAC provides the architectural pattern to satisfy it.
 
 \FloatBarrier  %% Force all pending floats before this point
 

@@ -85,24 +85,28 @@
     {
       "mode": "baseline",
       "n": 30,
-      "mean_ms": 114.88,
-      "p50_ms": 111.61,
-      "p95_ms": 144.85,
-      "p99_ms": 161.19,
-      "min_ms": 107.48,
-      "max_ms": 161.19,
-      "stdev_ms": 11.25
+      "mean_ms": 125.14,
+      "p50_ms": 121.61,
+      "p95_ms": 152.65,
+      "p99_ms": 159.53,
+      "min_ms": 117.49,
+      "max_ms": 159.53,
+      "stdev_ms": 9.94,
+      "ci95_lo": 121.42,
+      "ci95_hi": 128.85
     },
     {
       "mode": "secure",
       "n": 30,
-      "mean_ms": 158.0,
-      "p50_ms": 152.19,
-      "p95_ms": 188.0,
-      "p99_ms": 188.04,
-      "min_ms": 145.25,
-      "max_ms": 188.04,
-      "stdev_ms": 13.21
+      "mean_ms": 169.65,
+      "p50_ms": 164.95,
+      "p95_ms": 199.91,
+      "p99_ms": 205.23,
+      "min_ms": 157.23,
+      "max_ms": 205.23,
+      "stdev_ms": 12.48,
+      "ci95_lo": 164.99,
+      "ci95_hi": 174.31
     }
   ],
   "token_sizes": [
@@ -134,21 +138,69 @@
   "hop_costs": [
     {
       "hop": 1,
-      "mean_ms": 2.15,
-      "stdev_ms": 0.24,
+      "mean_ms": 2.45,
+      "stdev_ms": 0.16,
       "n": 30
     },
     {
       "hop": 2,
-      "mean_ms": 4.27,
-      "stdev_ms": 0.36,
+      "mean_ms": 4.93,
+      "stdev_ms": 0.49,
       "n": 30
     },
     {
       "hop": 3,
-      "mean_ms": 6.44,
-      "stdev_ms": 0.44,
+      "mean_ms": 7.17,
+      "stdev_ms": 0.31,
+      "n": 30
+    },
+    {
+      "hop": 4,
+      "mean_ms": 9.67,
+      "stdev_ms": 0.41,
+      "n": 30
+    },
+    {
+      "hop": 5,
+      "mean_ms": 12.03,
+      "stdev_ms": 0.45,
+      "n": 30
+    },
+    {
+      "hop": 6,
+      "mean_ms": 14.5,
+      "stdev_ms": 0.82,
+      "n": 30
+    },
+    {
+      "hop": 7,
+      "mean_ms": 16.89,
+      "stdev_ms": 0.7,
+      "n": 30
+    },
+    {
+      "hop": 8,
+      "mean_ms": 18.98,
+      "stdev_ms": 0.98,
+      "n": 30
+    },
+    {
+      "hop": 9,
+      "mean_ms": 21.09,
+      "stdev_ms": 1.13,
+      "n": 30
+    },
+    {
+      "hop": 10,
+      "mean_ms": 23.66,
+      "stdev_ms": 0.66,
       "n": 30
     }
-  ]
+  ],
+  "hop_cost_fit": {
+    "slope_ms_per_hop": 2.38,
+    "r_squared": 0.99932,
+    "hops_min": 1,
+    "hops_max": 10
+  }
 }

@@ -181,7 +181,6 @@ def _sim_a1_scope_escalation(cfg: AblationConfig, n: int) -> AblationOutcome:
                 ["docs:read", "hr:read"],
             )
             required = ["docs:read", "hr:read"]
-            aud_to_use = AUDIENCES["docs"] if cfg.enforce_audience else "wrong-service"
 
             try:
                 validate_token(
