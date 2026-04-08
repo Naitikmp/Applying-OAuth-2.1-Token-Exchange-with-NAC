@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-08T08:05:06.729709",
+  "timestamp": "2026-04-08T09:04:50.510651",
   "n_agents": 5,
   "n_rounds": 30,
   "n_workers": 4,
@@ -8,6 +8,6 @@
   "total_fail": 0,
   "false_positives": 0,
   "passed": true,
-  "elapsed_s": 5.969,
-  "throughput_ops_per_s": 100.52
+  "elapsed_s": 3.781,
+  "throughput_ops_per_s": 158.69
 }

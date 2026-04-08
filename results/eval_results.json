@@ -85,28 +85,28 @@
     {
       "mode": "baseline",
       "n": 30,
-      "mean_ms": 168.73,
-      "p50_ms": 155.55,
-      "p95_ms": 241.06,
-      "p99_ms": 252.7,
-      "min_ms": 123.64,
-      "max_ms": 252.7,
-      "stdev_ms": 40.84,
-      "ci95_lo": 153.48,
-      "ci95_hi": 183.98
+      "mean_ms": 121.0,
+      "p50_ms": 117.69,
+      "p95_ms": 151.85,
+      "p99_ms": 152.02,
+      "min_ms": 111.98,
+      "max_ms": 152.02,
+      "stdev_ms": 9.68,
+      "ci95_lo": 117.38,
+      "ci95_hi": 124.61
     },
     {
       "mode": "secure",
       "n": 30,
-      "mean_ms": 183.62,
-      "p50_ms": 176.12,
-      "p95_ms": 239.66,
-      "p99_ms": 245.41,
-      "min_ms": 165.67,
-      "max_ms": 245.41,
-      "stdev_ms": 20.13,
-      "ci95_lo": 176.1,
-      "ci95_hi": 191.13
+      "mean_ms": 161.47,
+      "p50_ms": 158.06,
+      "p95_ms": 189.13,
+      "p99_ms": 206.2,
+      "min_ms": 149.78,
+      "max_ms": 206.2,
+      "stdev_ms": 12.2,
+      "ci95_lo": 156.92,
+      "ci95_hi": 166.02
     }
   ],
   "token_sizes": [
@@ -138,68 +138,68 @@
   "hop_costs": [
     {
       "hop": 1,
-      "mean_ms": 2.74,
-      "stdev_ms": 0.38,
+      "mean_ms": 2.26,
+      "stdev_ms": 0.16,
       "n": 30
     },
     {
       "hop": 2,
-      "mean_ms": 5.07,
-      "stdev_ms": 0.37,
+      "mean_ms": 4.71,
+      "stdev_ms": 0.36,
       "n": 30
     },
     {
       "hop": 3,
-      "mean_ms": 8.61,
-      "stdev_ms": 1.64,
+      "mean_ms": 7.03,
+      "stdev_ms": 0.68,
       "n": 30
     },
     {
       "hop": 4,
-      "mean_ms": 10.76,
-      "stdev_ms": 1.54,
+      "mean_ms": 9.53,
+      "stdev_ms": 0.57,
       "n": 30
     },
     {
       "hop": 5,
-      "mean_ms": 13.86,
-      "stdev_ms": 1.17,
+      "mean_ms": 11.66,
+      "stdev_ms": 0.59,
       "n": 30
     },
     {
       "hop": 6,
-      "mean_ms": 19.46,
-      "stdev_ms": 1.64,
+      "mean_ms": 12.96,
+      "stdev_ms": 0.48,
       "n": 30
     },
     {
       "hop": 7,
-      "mean_ms": 26.93,
-      "stdev_ms": 2.97,
+      "mean_ms": 15.95,
+      "stdev_ms": 1.1,
       "n": 30
     },
     {
       "hop": 8,
-      "mean_ms": 32.04,
-      "stdev_ms": 3.51,
+      "mean_ms": 17.58,
+      "stdev_ms": 1.0,
       "n": 30
     },
     {
       "hop": 9,
-      "mean_ms": 36.41,
-      "stdev_ms": 2.21,
+      "mean_ms": 19.61,
+      "stdev_ms": 1.87,
       "n": 30
     },
     {
       "hop": 10,
-      "mean_ms": 40.25,
-      "stdev_ms": 2.45,
+      "mean_ms": 22.33,
+      "stdev_ms": 1.02,
       "n": 30
     }
   ],
   "hop_cost_fit": {
-    "slope_ms_per_hop": 3.747,
-    "r_squared": 0.948725,
+    "slope_ms_per_hop": 2.231,
+    "r_squared": 0.996474,
     "hops_min": 1,
     "hops_max": 10
   }
