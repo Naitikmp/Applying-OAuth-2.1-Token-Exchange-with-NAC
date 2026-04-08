@@ -7,7 +7,7 @@ The paper formalises and evaluates a security pattern that eliminates the **Conf
 
 ---
 
-## Architecture in One Picture
+## Architecture
 
 ```
          ┌──────────────┐
@@ -26,8 +26,8 @@ The paper formalises and evaluates a security pattern that eliminates the **Conf
   (9302)    (9303) (9304)  (9305)
 ```
 
-**Baseline stack** (ports 9200–9205): token passthrough — all 4 attacks succeed
-**Secure stack** (ports 9300–9305): RFC 8693 NAC — all 4 attacks blocked
+**Baseline stack** (ports 9200–9205): token passthrough — all 4 attacks succeed  
+**Secure stack** (ports 9300–9305): RFC 8693 NAC — all 4 attacks blocked  
 **Auth0 stack** (port 9400 sidecar): real IdP root token, same NAC enforcement
 
 ---
@@ -38,7 +38,7 @@ The paper formalises and evaluates a security pattern that eliminates the **Conf
 |-------------|---------|---------|
 | Python | 3.10+ | runtime |
 | Docker | any | Redis JTI store |
-| Auth0 account | free tier | optional real-IdP demo only |
+| Auth0 account | ---- | optional real-IdP demo only |
 
 ```bash
 # 1. Clone and install
@@ -61,7 +61,7 @@ python run_problem_demo.py
 # See the solution: RFC 8693 NAC blocks all 4 attacks
 python run_solution_demo.py
 
-# Run the full evaluation (N=30 rounds, produces eval_results.json)
+# Run the full evaluation (N=30 rounds, produces results/eval_results.json)
 python run_eval.py --rounds 30
 ```
 
@@ -77,96 +77,27 @@ Attack A4 (identity confusion) → RESOLVED [act chain: assistant-hub → alice]
 
 ## Running the Full Evaluation Suite
 
-### Main evaluation — produces all paper tables
-
 ```bash
+# Main evaluation — attack block rates + latency tables
 python run_eval.py --rounds 30
-```
+# → results/eval_results.json
 
-Outputs `eval_results.json` with attack block rates, latency (mean, CI₉₅, p50/p95/p99, σ), and per-hop cost measurements.
-
-### Ablation study — 720 trials across 6 enforcement configurations
-
-```bash
+# Ablation study — 720 trials across 6 enforcement configurations
 python run_ablation.py --trials 30
-```
+# → results/ablation_results.json
 
-Outputs `ablation_results.json`. Key finding: only Full NAC (aud + scope + JTI) blocks all four attacks.
+# Concurrent stress test — 5 agents × 30 rounds × 4 workers
+python run_concurrent_stress.py
+# → results/stress_results.json
 
-### Generate paper figures
-
-```bash
+# Generate paper figures from eval results
 python generate_charts.py
-```
+# → figures/nac_fig1_attacks.png … nac_fig5_hop_costs.png
 
-### Auth0 real-IdP evaluation (requires Auth0 setup below)
-
-```bash
+# Auth0 real-IdP evaluation (requires Auth0 setup — see below)
 python eval_auth0.py --rounds 30
+# → results/eval_auth0_results.json
 ```
-
-Outputs `eval_auth0_results.json`. Runs the same 4 attack tests with real Auth0 M2M root tokens — confirms the pattern is IdP-agnostic.
-
----
-
-## Auth0 Real-IdP Integration
-
-Validates the RFC 8693 sidecar pattern against a live Auth0 tenant.
-**Auth0 free tier is sufficient. Setup takes ~15 minutes.**
-
-### Step 1 — Create API in Auth0 Dashboard
-
-Applications → APIs → **+ Create API**
-- Name: `MCP Hub`
-- Identifier: `https://mcp-hub.example.com` ← this is `AUTH0_HUB_AUDIENCE`
-- Signing Algorithm: RS256
-
-Open the new API → **Permissions** tab → add each scope:
-
-| Permission | Description |
-|-----------|-------------|
-| `calendar:read` | Read calendar events |
-| `docs:read` | Read documents |
-| `comms:send` | Send communications |
-| `external:fetch` | Fetch from external APIs |
-
-Click **Save Changes**.
-
-### Step 2 — Create M2M Application
-
-Applications → Applications → **+ Create Application** → Machine to Machine
-- Name: `MCP Hub M2M`
-- Authorize for `MCP Hub` API → **check all 4 scopes** → Authorize
-- Copy: **Domain**, **Client ID**, **Client Secret**
-
-> **Most common issue**: empty `scope` in token output means the M2M app was not authorized for the API scopes. Go to Applications → MCP Hub M2M → APIs tab → MCP Hub → check all 4 scopes → Update.
-
-### Step 3 — Configure credentials
-
-Create `.env` in the project root:
-
-```
-AUTH0_DOMAIN=YOUR_TENANT.us.auth0.com
-AUTH0_CLIENT_ID=YOUR_CLIENT_ID
-AUTH0_CLIENT_SECRET=YOUR_CLIENT_SECRET
-AUTH0_HUB_AUDIENCE=https://mcp-hub.example.com
-AUTH0_ROOT_SCOPES=calendar:read docs:read comms:send external:fetch
-```
-
-### Step 4 — Run
-
-```bash
-# Validate config (no servers started)
-python run_auth0_demo.py --check-only
-
-# Full integration demo (18 checks, all should pass)
-python run_auth0_demo.py
-
-# Full evaluation with real Auth0 tokens
-python eval_auth0.py --rounds 30
-```
-
-See `AUTH0_SETUP.md` for detailed troubleshooting.
 
 ---
 
@@ -184,23 +115,34 @@ Core implementation
 Demo scripts
 ├── run_problem_demo.py      Baseline insecure stack (ports 9200–9205)
 ├── run_solution_demo.py     Secure NAC stack (ports 9300–9305)
-├── run_eval.py              Runs both stacks + eval_harness
+├── run_eval.py              Runs both stacks and evaluation harness
 
 Evaluation
 ├── eval_harness.py          Attack tests + latency + per-hop measurements
-├── run_ablation.py          Ablation: 720 trials × 6 enforcement configs
+├── run_ablation.py          Ablation study: 720 trials × 6 enforcement configs
+├── run_concurrent_stress.py Concurrent agent stress test (5 agents, 600 ops)
 ├── generate_charts.py       Paper figures from eval results
-├── eval_results.json        Main results (canonical for paper tables)
-├── ablation_results.json    Ablation results
 
 Auth0 integration
-├── auth0_config.py          Auth0 settings (reads from .env / env vars)
+├── auth0_config.py          Auth0 settings (reads from .env)
 ├── auth0_exchange_server.py RFC 8693 sidecar — validates Auth0 JWTs, issues child tokens
 ├── run_auth0_demo.py        Auth0 demo (18 security checks)
 ├── eval_auth0.py            Auth0 evaluation harness
-├── eval_auth0_results.json  Auth0 validation results
 ├── AUTH0_SETUP.md           Detailed Auth0 setup guide
-├── .env.auth0.example       Env var template
+├── .env.auth0.example       Environment variable template
+
+Results (generated — not committed)
+├── results/eval_results.json        Main evaluation results
+├── results/ablation_results.json    Ablation study results
+├── results/stress_results.json      Concurrent stress test results
+└── results/eval_auth0_results.json  Auth0 validation results
+
+Figures (generated — not committed)
+├── figures/nac_fig1_attacks.png
+├── figures/nac_fig2_latency.png
+├── figures/nac_fig3_token_sizes.png
+├── figures/nac_fig4_summary.png
+└── figures/nac_fig5_hop_costs.png
 
 Paper
 └── paper_5.tex              LaTeX source (IEEEtran journal format)
@@ -238,8 +180,61 @@ Paper
 | Ablation (720 trials) | Full NAC is the **only** config that blocks all 4 attacks |
 | Per-hop crypto cost | **2.15 ms** (RSA-2048 sign + Redis write) |
 | O(k) linearity | R² = 0.9999 over k = 1…10 hops |
-| End-to-end overhead | +35.6% on single machine; projected +7–15% in production |
+| End-to-end overhead | +35.6% sequential; ~O(1) with concurrent issuance |
+| Concurrent stress test | 600/600 ops, 0 false positives, 143 exchanges/s |
 | Auth0 validation | **100%** (30/30) with live Auth0 M2M root tokens |
+
+---
+
+## Auth0 Real-IdP Integration
+
+Validates the RFC 8693 sidecar pattern against a live Auth0 tenant.
+**Auth0 Setup takes ~15 minutes.**
+
+### Step 1 — Create API in Auth0 Dashboard
+
+Applications → APIs → **+ Create API**
+- Name: `MCP Hub`
+- Identifier: `https://mcp-hub.example.com` ← this is `AUTH0_HUB_AUDIENCE`
+- Signing Algorithm: RS256
+
+Open the new API → **Permissions** tab → add each scope:
+
+| Permission | Description |
+|-----------|-------------|
+| `calendar:read` | Read calendar events |
+| `docs:read` | Read documents |
+| `comms:send` | Send communications |
+| `external:fetch` | Fetch from external APIs |
+
+### Step 2 — Create M2M Application
+
+Applications → Applications → **+ Create Application** → Machine to Machine
+- Name: `MCP Hub M2M`
+- Authorize for `MCP Hub` API → check all 4 scopes → Authorize
+- Copy: **Domain**, **Client ID**, **Client Secret**
+
+### Step 3 — Configure credentials
+
+Create `.env` in the project root:
+
+```
+AUTH0_DOMAIN=YOUR_TENANT.us.auth0.com
+AUTH0_CLIENT_ID=YOUR_CLIENT_ID
+AUTH0_CLIENT_SECRET=YOUR_CLIENT_SECRET
+AUTH0_HUB_AUDIENCE=https://mcp-hub.example.com
+AUTH0_ROOT_SCOPES=calendar:read docs:read comms:send external:fetch
+```
+
+### Step 4 — Run
+
+```bash
+python run_auth0_demo.py --check-only   # validate config
+python run_auth0_demo.py                # full 18-check demo
+python eval_auth0.py --rounds 30        # evaluation with real tokens
+```
+
+See `AUTH0_SETUP.md` for detailed troubleshooting.
 
 ---
 
@@ -266,10 +261,10 @@ Uses Claude Sonnet as the MCP agent planner. Without the key, a deterministic st
 
 ## Design Invariants
 
-These are load-bearing for the paper's security claims. Do not change without re-running the evaluation and updating the paper.
+These are load-bearing for the paper's security claims.
 
-1. **`NAC_PUBLIC_ONLY=1` on workers** — workers physically cannot load the private signing key
-2. **`revoke_jti()` stores `time.time()`** not `0.0` — prevents immediate cleanup deleting revocation records
+1. **`NAC_PUBLIC_ONLY=1` on workers** — workers cannot load the private signing key
+2. **`revoke_jti()` stores `time.time()`** not `0.0` — prevents immediate cleanup from deleting revocation records
 3. **Cleanup horizon = `CHILD_TOKEN_TTL + 60 = 180s`** — revoked JTIs survive their token's full TTL
-4. **`asyncio.gather` in `assistant_server.py`** — concurrent token exchange (Equation 3 in paper)
+4. **`asyncio.gather` in `assistant_server.py`** — concurrent token exchange (O(1) overhead per Proposition 1)
 5. **Redis as JTI store** — ~0.1 ms/op; file-based locks on Windows are ~65 ms/op

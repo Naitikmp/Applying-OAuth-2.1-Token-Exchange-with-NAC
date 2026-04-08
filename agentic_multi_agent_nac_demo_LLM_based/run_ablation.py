@@ -402,6 +402,7 @@ def export_json(outcomes: list[AblationOutcome], path: pathlib.Path) -> None:
                     "trials":     o.trials,
                 }
         out.append(row)
+    path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps({"ablation": out}, indent=2))
     print(f"\n[Ablation] Results written to {path.resolve()}")
 
@@ -417,5 +418,5 @@ if __name__ == "__main__":
     print(f"\n[Ablation] Running ablation study ({args.trials} trials × 6 configs × 4 attacks) ...")
     outcomes = run_ablation(trials=args.trials)
     print_ablation_table(outcomes)
-    export_json(outcomes, pathlib.Path("ablation_results.json"))
-    print("\n[Ablation] Done. Add ablation_results.json to generate_charts.py for Fig 6.")
+    export_json(outcomes, pathlib.Path("results/ablation_results.json"))
+    print("\n[Ablation] Done. Results saved to results/ablation_results.json.")

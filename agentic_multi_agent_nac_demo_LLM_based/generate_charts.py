@@ -75,12 +75,12 @@ REFERENCE = {
 
 
 def _load_data() -> dict:
-    p = pathlib.Path("eval_results.json")
+    p = pathlib.Path("results/eval_results.json")
     if p.exists():
         data = json.loads(p.read_text())
         print(f"[Charts] Loaded results from {p.resolve()}")
         return data
-    print("[Charts] eval_results.json not found — using reference numbers from verified run.")
+    print("[Charts] results/eval_results.json not found — using reference numbers from verified run.")
     return REFERENCE
 
 
@@ -581,18 +581,19 @@ def main() -> None:
         text_report(data)
         return
 
-    out_dir = pathlib.Path(".")
+    out_dir = pathlib.Path("figures")
+    out_dir.mkdir(exist_ok=True)
     fig1_attacks(data,      out_dir / "nac_fig1_attacks.png")
     fig2_latency(data,      out_dir / "nac_fig2_latency.png")
     fig3_token_sizes(data,  out_dir / "nac_fig3_token_sizes.png")
     fig4_summary(data,      out_dir / "nac_fig4_summary.png")
     fig5_hop_costs(data,    out_dir / "nac_fig5_hop_costs.png")
 
-    saved = [f"nac_fig{i+1}_*.png" for i in range(4)]
+    saved = [f"figures/nac_fig{i+1}_*.png" for i in range(4)]
     if data.get("hop_costs"):
-        saved.append("nac_fig5_hop_costs.png")
+        saved.append("figures/nac_fig5_hop_costs.png")
     print(f"\n[Charts] Figures saved: {', '.join(saved)}")
-    print("[Charts] Use nac_fig4_summary.png for a one-page paper overview.")
+    print("[Charts] Use figures/nac_fig4_summary.png for a one-page paper overview.")
     text_report(data)
 
 

@@ -653,7 +653,8 @@ def _export_json(
         ],
         "hop_cost_fit": _hop_cost_fit(hop_costs),
     }
-    path = pathlib.Path("eval_results.json")
+    path = pathlib.Path("results/eval_results.json")
+    path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps(out, indent=2))
     print(f"\n[Eval] Results written to {path.resolve()}")
 

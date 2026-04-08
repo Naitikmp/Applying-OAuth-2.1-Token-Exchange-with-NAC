@@ -390,7 +390,7 @@ async def main(n_rounds: int) -> None:
     # Try to load internal baseline for comparison
     baseline_mean: float | None = None
     secure_mean:   float | None = None
-    results_path   = Path(__file__).parent / "eval_results.json"
+    results_path   = Path(__file__).parent / "results" / "eval_results.json"
     if results_path.exists():
         try:
             with open(results_path) as f:
@@ -484,7 +484,8 @@ async def main(n_rounds: int) -> None:
         "raw_rounds": rounds,
     }
 
-    out_path = Path(__file__).parent / "eval_auth0_results.json"
+    out_path = Path(__file__).parent / "results" / "eval_auth0_results.json"
+    out_path.parent.mkdir(exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(output, f, indent=2)
     print(f"\n  Results written to: {out_path}")

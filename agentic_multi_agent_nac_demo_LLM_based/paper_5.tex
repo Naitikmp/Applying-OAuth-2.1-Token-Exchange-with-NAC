@@ -37,6 +37,7 @@
   decorations.text
 }
 \pgfplotsset{compat=1.18}
+\usepgfplotslibrary{groupplots}
 
 \hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
 
@@ -223,22 +224,14 @@ gaps.
 \label{sec:background}
 %% ============================================================
 
-This section establishes the technical context for the paper. We introduce the
-LLM agent model underlying MCP tool use, summarise the Model Context Protocol,
-review the relevant OAuth and JWT standards (including RFC 8693 token exchange
-and RFC 7009 revocation), and map the problem to the OWASP Generative AI threat
-taxonomy.
+This section establishes the technical context for the paper.
 
-\subsection{Large Language Models and Agentic Systems}
+\subsection{LLM Agents and the ReAct Model}
 
-A \textit{Large Language Model} (LLM) is a neural network trained to generate
-text conditioned on a prompt \cite{vaswani2017}. Modern LLMs exhibit emergent
-capabilities including multi-step reasoning and tool use. \textit{Agentic AI}
-refers to systems in which an LLM autonomously selects and executes actions to
-achieve user-specified goals \cite{wang2024survey}. The \textit{ReAct} paradigm
-\cite{yao2022react} interleaves reasoning with action calls: the model reasons
-about which tool to invoke, calls it, observes the result, and re-plans. This
-is the computational model underlying MCP tool use.
+Modern LLMs exhibit emergent tool-use capabilities. In the \textit{ReAct}
+paradigm \cite{yao2022react}, the model interleaves reasoning with action
+calls: it selects a tool, calls it, observes the result, and re-plans. This
+is the computational model underlying MCP tool use \cite{wang2024survey}.
 
 \subsection{The Model Context Protocol}
 
@@ -386,40 +379,14 @@ delegation chain.
 \subsection{RFC 8693: OAuth 2.0 Token Exchange}
 
 RFC 8693 \cite{rfc8693} defines an HTTP Security Token Service (STS) protocol
-for exchanging one token for another with different properties. The specification
-defines two delegation semantics:
-
-\textbf{Impersonation}: The acting party takes on the full identity of the
-subject; the intermediate is invisible to downstream services.
-
-\textbf{Delegation}: The acting party remains distinguishable from the subject.
-The new token retains the subject identity while recording the actor in the
-\texttt{act} claim. For agentic workflows, delegation is the appropriate
-choice---the user identity ($\texttt{sub}$) is preserved for accountability while
-the orchestrating agent is recorded as the actor.
-
-RFC 8693 defines the scope non-escalation invariant: the requested scope of a
-derived token must not exceed that of the subject token. This is the formal
-basis for scope attenuation enforcement. The specification also defines the
-nesting semantics for the \texttt{act} claim:
-
-\begin{lstlisting}[language={},caption={Nested act claim per RFC 8693 \S 4.1},
-                   label={lst:actchain}]
-{
-  "sub": "alice",
-  "aud": "service-B",
-  "act": {
-    "sub": "orchestrator",
-    "act": {
-      "sub": "prior-actor"  // chain grows inward
-    }
-  }
-}
-\end{lstlisting}
-
-RFC 8693 is deployed in production by Microsoft (On-Behalf-Of flow), Auth0
-(Token Vault), ZITADEL, Authlete, Keycloak, Box, Salesforce, and
-RedHat \cite{rfc8693_deploy}.
+for exchanging one token for another with different properties.
+We use the \textit{delegation} semantics: the acting party remains
+distinguishable from the subject; the new token preserves \texttt{sub} = $u$
+while recording the hub in a nested \texttt{act} claim. RFC 8693 also defines
+the \textit{scope non-escalation invariant}: a derived token's scope must not
+exceed the subject token's scope---the formal basis for P2. The specification
+is deployed in production by Microsoft, Auth0, ZITADEL, Authlete, Keycloak,
+and Salesforce \cite{rfc8693_deploy}.
 
 \subsection{Token Revocation Stores}
 
@@ -820,6 +787,23 @@ This construction directly restores all three violated properties: the
 satisfies P3. Figure~\ref{fig:nac_arch} shows the NAC architecture, and
 Figure~\ref{fig:nac_seq} illustrates the complete token exchange sequence.
 
+Listing~\ref{lst:child} shows the reference implementation's child token
+payload construction, which maps directly to Equation~(\ref{eq:child}).
+
+\begin{lstlisting}[language=Python, label=lst:child,
+  caption={Child token construction (\texttt{nac\_common.py}).
+  Each field enforces one security property.}]
+payload = {
+  "sub":   parent["sub"],           # subject preserved
+  "aud":   new_audience,            # P1: per-worker audience
+  "scope": scope_to_str(new_scope), # P2: attenuated scope
+  "jti":   str(uuid.uuid4()),       # one-time-use ID
+  "act":   {"sub": actor,           # P3: delegation chain
+             "act": parent.get("act")},
+}
+child_token = jwt.encode(payload, signing_key, algorithm="RS256")
+\end{lstlisting}
+
 %% ---- FIGURE 3: NAC Architecture (single column, fixed) ----
 \begin{figure}[t]
 \centering
@@ -929,6 +913,22 @@ sub-millisecond Redis write); only $t_{\mathrm{http}}$ varies with deployment
 topology and is eliminable via co-location of the authorization server with
 the hub.
 \end{proof}
+
+Listing~\ref{lst:gather} shows the hub implementation that realises
+Equation~(\ref{eq:concurrent}) — all four RFC~8693 exchanges are dispatched
+simultaneously via \texttt{asyncio.gather}, collapsing sequential latency
+$k \times t_{\mathrm{exchange}}$ to a single round-trip.
+
+\begin{lstlisting}[language=Python, label=lst:gather,
+  caption={Concurrent RFC 8693 exchange (\texttt{assistant\_server.py});
+  all four tokens are issued in parallel, achieving $O(1)$ wall-clock overhead.}]
+cal, docs, email, slack = await asyncio.gather(
+    _get_worker_token(root, "calendar", ["calendar:read"]),
+    _get_worker_token(root, "docs",     ["docs:read"]),
+    _get_worker_token(root, "comms",    ["email:send"]),
+    _get_worker_token(root, "comms",    ["slack:write"]),
+)
+\end{lstlisting}
 
 \subsection{N-Hop Delegation Chains}
 
@@ -1237,6 +1237,24 @@ validation. Key schema:
 \end{cases}
 \end{equation}
 
+Listing~\ref{lst:jti} shows the three JTI operations that implement this
+schema. Each operation completes in $\approx 0.1$\,ms (co-located Redis,
+binary protocol), contributing only $\approx 2\%$ of total overhead.
+
+\begin{lstlisting}[language=Python, label=lst:jti,
+  caption={Redis JTI store: register on issue, revoke on exchange,
+  check on each worker request (\texttt{nac\_common.py}, $\approx$0.1\,ms/op).}]
+def register_jti(jti, exp):          # called by auth server on issue
+    ttl = max(1, int(exp - time.time()) + 60)
+    redis.set(f"nac:jti:{jti}", "active", ex=ttl)
+
+def revoke_jti(jti):                 # called after token is exchanged
+    redis.set(f"nac:jti:{jti}", "revoked", ex=300)
+
+def is_jti_revoked(jti):             # called by worker before accepting
+    return redis.get(f"nac:jti:{jti}") == "revoked"
+\end{lstlisting}
+
 Any store satisfying the interface in Section~\ref{sec:solution} may be
 substituted; the security semantics are unaffected.
 
@@ -1258,6 +1276,26 @@ TTL than the root token, minimising the replay window in the event that a
 constants (\texttt{WRONG\_AUDIENCE}, \texttt{SCOPE\_INSUFFICIENT},
 \texttt{TOKEN\_REPLAY}), enabling the evaluation harness to distinguish
 security rejections from implementation bugs.
+
+Listing~\ref{lst:validate} shows the \texttt{validate\_token} function shared
+by all four worker services. Each enforcement flag corresponds to one theorem:
+audience binding (Theorem~1), scope attenuation (Theorem~2), and JTI replay
+prevention (Theorem~4).
+
+\begin{lstlisting}[language=Python, label=lst:validate,
+  caption={Worker token validation (\texttt{nac\_common.py}); each check
+  corresponds to one theorem.}]
+def validate_token(token, expected_audience, required_scopes,
+                   enforce_jti=False):
+    # Theorem 1 (P1): raises InvalidAudienceError if aud mismatches
+    claims = jwt.decode(token, pub_key, algorithms=["RS256"],
+                        audience=expected_audience)
+    if enforce_jti and is_jti_revoked(claims["jti"]):
+        raise ValueError("TOKEN_REPLAY")        # Theorem 4
+    if any(s not in claims["scope"] for s in required_scopes):
+        raise ValueError("SCOPE_INSUFFICIENT")  # Theorem 2 (P2)
+    return claims
+\end{lstlisting}
 
 \subsection{Port Layout}
 
@@ -1283,6 +1321,76 @@ Secure (NAC)        & 9300 & 9301 & 9302 & 9303 & 9304 & 9305 \\
 \section{Evaluation}
 \label{sec:eval}
 %% ============================================================
+
+%% ---- FIGURE: Combined evaluation overview (full width) ----
+\begin{figure*}[!t]
+\centering
+\begin{tikzpicture}
+\begin{groupplot}[
+  group style={
+    group size=2 by 1,
+    horizontal sep=1.8cm,
+  },
+  width=0.46\textwidth,
+  height=5.0cm,
+]
+
+%% ── Left panel: Attack block rates ──────────────────────────
+\nextgroupplot[
+  ybar, bar width=10pt,
+  symbolic x coords={A1,A2,A3,A4},
+  xtick=data,
+  ymin=0, ymax=115,
+  ylabel={Block / attribution rate (\%)},
+  title={\textbf{(a)}~Attack Mitigation ($N=30$)},
+  legend style={at={(0.5,-0.30)}, anchor=north, legend columns=2,
+                font=\scriptsize},
+  enlarge x limits=0.25,
+  nodes near coords, nodes near coords align=vertical,
+  every node near coord/.style={font=\scriptsize},
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+  title style={font=\small},
+]
+\addplot[fill=C_BASE!80, draw=C_BASE!60!black]
+  coordinates {(A1,0)(A2,0)(A3,0)(A4,0)};
+\addplot[fill=C_SEC!80,  draw=C_SEC!60!black]
+  coordinates {(A1,100)(A2,100)(A3,100)(A4,100)};
+\legend{Baseline (passthrough), Secure (Full NAC)}
+
+%% ── Right panel: Per-hop cost linearity ─────────────────────
+\nextgroupplot[
+  width=0.46\textwidth,
+  height=5.0cm,
+  xlabel={Delegation depth $k$},
+  ylabel={Exchange cost (ms)},
+  title={\textbf{(b)}~Per-Hop Cost Linearity ($N=30$)},
+  xmin=0, xmax=11,
+  ymin=0,
+  legend style={at={(0.5,-0.30)}, anchor=north, legend columns=2,
+                font=\scriptsize},
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+  title style={font=\small},
+]
+%% Measured data points
+\addplot[color=C_SEC, mark=*, mark size=1.8pt, thick]
+  coordinates {
+    (1,2.15)(2,4.27)(3,6.44)(5,10.73)(10,21.52)
+  };
+%% Linear fit y = 2.15k
+\addplot[color=C_BASE, dashed, thick, domain=0:11]
+  {2.15*x};
+\legend{Measured, $y=2.15k$ ($R^2{=}0.9999$)}
+
+\end{groupplot}
+\end{tikzpicture}
+\caption{Evaluation summary. \textbf{(a)}~Attack block/attribution rate:
+Full NAC achieves 100\% on all four attacks; token passthrough achieves 0\%.
+\textbf{(b)}~Per-hop cryptographic exchange cost confirms $O(k)$ linearity
+($y = 2.15k$\,ms, $R^2 = 0.9999$, $k = 1 \ldots 10$).}
+\label{fig:eval_summary}
+\end{figure*}
 
 \subsection{Experimental Setup}
 
@@ -1326,6 +1434,7 @@ A4 & Attribution (audit) & 0\% attributed & 100\% & \textit{attribution rate} \\
 \end{tabular}
 \end{table}
 
+Figure~\ref{fig:eval_summary}(a) visualises the results.
 The NAC pattern achieves a 100\% block rate across all attack vectors in all
 30~trials. These results are not surprising --- they are the expected
 consequence of Theorems~1--4. A1 is blocked because Theorem~2 (P2) guarantees
@@ -1515,9 +1624,9 @@ inter-service transport.
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:hopcosts} empirically confirms the $O(k)$ bound of
-Proposition~\ref{prop:overhead}. Each additional delegation hop adds a
-constant $\approx 2.15$\,ms (one RSA-2048 sign plus one revocation store
+Table~\ref{tab:hopcosts} and Figure~\ref{fig:eval_summary}(b) empirically
+confirm the $O(k)$ bound of Proposition~\ref{prop:overhead}.
+Each additional delegation hop adds a constant $\approx 2.15$\,ms (one RSA-2048 sign plus one revocation store
 write) --- exactly the irreducible per-hop constant the proposition
 identifies. This linearity follows from the independence argument in the
 proof: each hop performs a constant-cost operation with no
@@ -1634,36 +1743,18 @@ finding empirically demonstrates that the three properties are not
 substitutable---partial enforcement that works in one deployment topology may fail
 in another.
 
-\subsection{Adoption Path for Production Systems}
+\subsection{Adoption Path}
 
-Organisations using Keycloak ($\geq$17), Microsoft Entra ID (OBO flow), Auth0
-(Token Vault), ZITADEL, or Authlete can adopt this pattern without deploying a
-custom authorization server. Google's Agent-to-Agent (A2A) protocol
-\cite{google_a2a} similarly leverages OAuth for inter-agent authentication but
-does not yet specify per-hop token exchange, making NAC a complementary
-extension. For organizations using an IdP without native RFC 8693 support, a
-lightweight token exchange sidecar can be deployed to proxy exchange requests
-to the existing IdP; this path was validated end-to-end against Auth0 in
-Section~\ref{sec:auth0_validation}.
-
-\subsection{Practical Adoption Checklist}
-
-The following four steps cover the minimum integration surface for an engineering
-team adopting the NAC pattern in an existing MCP deployment. First,
-\textbf{verify IdP support}: confirm your identity provider supports the RFC 8693
-\texttt{urn:ietf:params:oauth:grant-type:token-exchange} grant type (Keycloak
-$\geq$17, Microsoft Entra OBO, Auth0 Token Vault, ZITADEL, and Authlete all
-qualify); if not, deploy a lightweight exchange sidecar as described in
-Section~\ref{sec:auth0_validation}. Second, \textbf{register per-service
-audiences}: each worker service must have a registered OAuth resource identifier,
-which is the only configuration change required at the identity provider. Third,
-\textbf{update the hub}: replace the single forwarded token with one
-\texttt{POST /token/exchange} call per worker, fired concurrently using
-\texttt{asyncio.gather} or an equivalent parallel construct---the total code
-change is fewer than 50 lines. Fourth, \textbf{enable worker validation}: each
-worker must verify the \texttt{aud}, \texttt{scope}, \texttt{act} chain depth,
-and \texttt{jti} (revoke after first use) via a shared middleware layer to
-avoid per-service duplication.
+Keycloak ($\geq$17), Microsoft Entra ID (OBO flow), Auth0 Token Vault, ZITADEL,
+and Authlete all support RFC 8693 natively; no custom authorization server is
+needed. For IdPs without native support, a lightweight sidecar---validated
+end-to-end against Auth0 in Section~\ref{sec:auth0_validation}---proxies
+exchange requests. The minimum integration steps are:
+(1)~\textbf{register per-service audiences} at the IdP;
+(2)~\textbf{update the hub} to fire one \texttt{POST /token/exchange} per worker
+via \texttt{asyncio.gather} ($<$50 lines of change);
+(3)~\textbf{enable worker validation} of \texttt{aud}, \texttt{scope}, \texttt{act}
+depth, and \texttt{jti} revocation in shared middleware.
 
 \subsection{Threat Model Boundaries}
 

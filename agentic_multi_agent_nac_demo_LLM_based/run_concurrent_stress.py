@@ -284,9 +284,11 @@ async def _run_stress() -> int:
         "elapsed_s":            round(elapsed, 3),
         "throughput_ops_per_s": round(total_ops / elapsed, 2),
     }
-    with open("stress_results.json", "w") as fh:
+    import pathlib
+    pathlib.Path("results").mkdir(exist_ok=True)
+    with open("results/stress_results.json", "w") as fh:
         json.dump(output, fh, indent=2)
-    print(f"\n  Results saved to stress_results.json")
+    print(f"\n  Results saved to results/stress_results.json")
     return 0 if passed else 1
 
 
