@@ -110,9 +110,11 @@
 to MCP Agentic Workflows:\\
 An Architectural Pattern for Secure Delegation}
 
-\author{\IEEEauthorblockN{Naitik Patel}
-\IEEEauthorblockA{Independent Researcher\\
-naitikpatel044@gmail.com}}
+\author{\IEEEauthorblockN{[Author Name]}
+\IEEEauthorblockA{\textit{[Department]} \\
+\textit{[Institution]}\\
+[City, Country]\\
+[email@institution.edu]}}
 
 \maketitle
 
@@ -200,22 +202,17 @@ gaps.
 
 \textbf{Contributions:}
 \begin{enumerate}
-  \item \textbf{Formal problem characterisation.} We define three independent
-        security properties (P1 audience binding, P2 scope attenuation, P3
-        delegation chain visibility) and prove that token passthrough violates
-        all three simultaneously (Section~\ref{sec:problem}).
-  \item \textbf{Formal solution with proofs.} We propose the RFC~8693 NAC
-        architectural pattern and prove, by construction, that it satisfies
-        P1--P3 and prevents token replay (Theorems~1--4,
-        Section~\ref{sec:solution}).
-  \item \textbf{Theoretical overhead bound.} We prove that per-hop overhead is
-        $O(k)$ sequentially and $O(1)$ in wall-clock time under concurrent
-        issuance, with an irreducible constant of one RSA signing operation
-        plus one revocation store write (Proposition~1,
-        Section~\ref{sec:solution}).
-  \item \textbf{Empirical validation.} A reference implementation and 720-trial
-        ablation study confirm all four theorems and the overhead bound, with
-        zero false positives and $R^2 = 0.9999$ linearity (Section~\ref{sec:eval}).
+  \item We formally characterise the token passthrough anti-pattern and the three
+        independent security properties it violates
+        (Section~\ref{sec:problem}).
+  \item We propose the \textit{RFC 8693 NAC architectural pattern} for MCP
+        multi-agent delegation and prove it satisfies all three properties by
+        construction (Section~\ref{sec:solution}).
+  \item We present a reference implementation and evaluate it against four
+        concrete attack vectors with a 720-trial ablation study confirming
+        property independence (Section~\ref{sec:eval}).
+  \item We derive theoretical bounds on per-hop overhead and validate them
+        empirically (Section~\ref{sec:eval}).
 \end{enumerate}
 
 %% ============================================================
@@ -906,30 +903,6 @@ to $\approx t_{\mathrm{exchange}}$ (the maximum across concurrent requests),
 subject to authorization server capacity. This is the basis for the
 ``parallel estimate'' in Section~\ref{sec:eval}.
 
-\begin{proposition}[\textbf{Overhead Bound}]
-\label{prop:overhead}
-For $k$ independent workers, sequential NAC overhead is $O(k)$ with a
-constant equal to one RSA signing operation plus one revocation store write
-per hop. Under concurrent issuance, wall-clock overhead collapses to $O(1)$
-relative to $k$, bounded by $t_{\mathrm{sign}} + t_{\mathrm{store}}$ --- the
-cost of a single exchange --- regardless of how many workers are invoked.
-\end{proposition}
-\begin{proof}
-Each child token exchange is a function solely of
-$(T_{\mathrm{root}},\, \mathrm{aud}_i,\, s_i)$. Because no exchange reads or
-modifies the output of any other exchange, the $k$ operations are fully
-independent --- there is no cross-exchange data dependency. Sequential
-execution therefore costs exactly $k \cdot (t_{\mathrm{sign}} +
-t_{\mathrm{store}} + t_{\mathrm{http}})$; concurrent execution via
-\texttt{asyncio.gather} or equivalent reduces the wall-clock component to
-$\max_i(t_{\mathrm{exchange},i})$, which approaches $t_{\mathrm{sign}} +
-t_{\mathrm{store}}$ when exchanges are dispatched simultaneously. The signing
-and store operations are cryptographically fixed-cost (RSA-2048 sign,
-sub-millisecond Redis write); only $t_{\mathrm{http}}$ varies with deployment
-topology and is eliminable via co-location of the authorization server with
-the hub.
-\end{proof}
-
 \subsection{N-Hop Delegation Chains}
 
 For hierarchical delegation---where $W_i$ must itself call a further downstream
@@ -1197,15 +1170,13 @@ language with an HTTP client and JWT library.
 \label{sec:impl}
 %% ============================================================
 
-Theorems~1--4 and Proposition~\ref{prop:overhead} establish the security and
-overhead properties of the NAC pattern by construction. To provide empirical
-confirmation, we constructed a minimal reference implementation: two parallel
-server stacks sharing identical six-component topology, differing only in
-whether RFC 8693 exchange and token validation are enforced. The implementation
-is intentionally minimal---each component is a single Python file using FastAPI
-and standard libraries---so that every security-relevant decision is
-immediately auditable and the distance between theory and code is as small as
-possible.
+To evaluate the pattern empirically, we constructed two parallel server stacks:
+a \textit{baseline} (token passthrough) stack and a \textit{secure} (NAC) stack.
+Both stacks instantiate the same six logical components; the difference is whether
+RFC 8693 exchange is enforced at the authorization server and whether validation
+is enforced at workers. The implementation is intentionally minimal---each
+component is a single Python file using FastAPI and standard libraries---so that
+the security-relevant logic is immediately auditable without framework noise.
 
 \subsection{Component Architecture}
 
@@ -1327,15 +1298,9 @@ A4 & Attribution (audit) & 0\% attributed & 100\% & \textit{attribution rate} \\
 \end{table}
 
 The NAC pattern achieves a 100\% block rate across all attack vectors in all
-30~trials. These results are not surprising --- they are the expected
-consequence of Theorems~1--4. A1 is blocked because Theorem~2 (P2) guarantees
-scope attenuation is enforced before any child token is issued. A2 is blocked
-because Theorem~1 (P1) guarantees $\texttt{aud}(T_i) = \mathrm{AUDIENCE}(W_i)$
-by construction. A3 is blocked because Theorem~4 guarantees the \texttt{jti}
-is revoked after first use. A4 is resolved because Theorem~3 (P3) guarantees
-a cryptographically signed \texttt{act} chain in every child token. The
-100\% rate confirms that the implementation faithfully realises all four
-theorems with no edge cases.
+30~trials. The determinism of these results follows directly from the
+cryptographic proofs in Section~\ref{sec:solution}: each block is an assertion
+that a specific JWT claim does not match a required value.
 
 \subsection{Ablation Study: Property Independence}
 \label{sec:ablation}
@@ -1452,12 +1417,10 @@ Theor.\ concurrent bound$^\dagger$
 }
 \end{table}
 
-Proposition~\ref{prop:overhead} predicts that sequential overhead is $O(k)$
-and concurrent overhead approaches a constant. Table~\ref{tab:latency}
-confirms both predictions. The measured sequential overhead of $+35.6\%$
-($125.1 \pm 3.7$\,ms baseline vs.\ $169.6 \pm 4.7$\,ms secure; 95\% CI via
-$t_{29} = 2.045$) reflects a worst-case single-machine, single-worker
-authorization server with no co-location. The $\sigma$-ratio of $1.26\times$
+The measured overhead of $+35.6\%$ ($125.1 \pm 3.7$\,ms baseline vs.\
+$169.6 \pm 4.7$\,ms secure; 95\% CI computed via $t_{29} = 2.045$) reflects
+a single-machine, single-worker authorization server. The non-overlapping CI
+intervals confirm statistical significance. The $\sigma$-ratio of $1.26\times$
 confirms that NAC overhead is predictable---the revocation store eliminates
 cross-process scheduling jitter. The theoretical concurrent bound of $+8.9\%$
 represents the expected latency with a multi-worker authorization server enabling
@@ -1515,12 +1478,9 @@ inter-service transport.
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:hopcosts} empirically confirms the $O(k)$ bound of
-Proposition~\ref{prop:overhead}. Each additional delegation hop adds a
-constant $\approx 2.15$\,ms (one RSA-2048 sign plus one revocation store
-write) --- exactly the irreducible per-hop constant the proposition
-identifies. This linearity follows from the independence argument in the
-proof: each hop performs a constant-cost operation with no
+Each additional delegation hop adds a constant $\approx 2.15$\,ms (one RSA-2048
+signing operation plus one revocation store write). This linearity follows from
+first principles: each hop performs an independent constant-cost operation with no
 inter-hop dependency; the $R^2 = 0.9999$ fit over ten data points (not merely
 three) confirms $O(k)$ overhead, providing a reliable model for production
 capacity planning.
@@ -1735,18 +1695,10 @@ Absolute values are environment-dependent; relative overhead is the meaningful
 comparison.
 
 \textbf{Stub services}: Worker business logic returns deterministic stub data.
-The security properties under evaluation---audience binding, scope attenuation,
-and delegation chain visibility---are enforced at the token validation layer and
-are independent of worker business logic. Stub services isolate the security
-measurement from external API latency variability, which strengthens rather than
-weakens the attack outcome results.
+Real downstream APIs add their own latency, reducing relative NAC overhead.
 
-\textbf{Simulated authorization flow}: The custom demo server simulates user
-consent without a browser-based PKCE exchange. Redirect URI validation is
-enforced in the secure stack (mismatched URIs are rejected). Full end-to-end
-compatibility with a production PKCE flow is confirmed by the Auth0 validation
-(Section~\ref{sec:auth0_validation}), which uses a live Auth0 tenant that
-enforces PKCE for all M2M token issuance.
+\textbf{Simulated authorization flow}: OAuth consent is simulated; production
+requires PKCE \cite{rfc7636} and a registered redirect URI.
 
 \textbf{Single revocation store instance}: Production deployments should use a
 highly available configuration (replicated cluster with sentinel failover).
@@ -1760,13 +1712,9 @@ Several directions remain open for future work.
 injection that drives an agent to call a tool can also gain access to the
 resulting child tokens; the one-time-use \texttt{jti} semantics should limit
 damage, but a formal analysis remains open.
-\textit{Concurrent agent stress test}: a stress test harness
-(\texttt{run\_concurrent\_stress.py}) is included in the supplementary
-repository and has been executed. Five simultaneous agents shared one root
-token across 30 rounds each (600~total exchange operations); all 600
-succeeded with zero false positives, confirming that the Redis JTI store
-handles concurrent registrations and revocations correctly under multi-agent
-load (throughput: 143~exchanges/s on the evaluation machine).
+\textit{Concurrent agent stress test}: running multiple simultaneous agents that
+share a root token would verify that the revocation store handles concurrent
+registrations without false positives.
 \textit{Additional IdP portability}: Auth0 M2M validation is complete
 (Section~\ref{sec:auth0_validation}); confirming portability against Keycloak 17
 and Microsoft Entra OBO remains open.
@@ -1816,19 +1764,16 @@ architectural pattern to satisfy it.
 \FloatBarrier  %% Force all pending floats before this point
 
 \section*{Acknowledgments}
-This work was conducted independently, without institutional or industry
-affiliation. All evaluation code, server implementations, raw results, and
-reproduction instructions are openly available on GitHub \cite{nac_mcp_impl}.
-A citable, versioned archive of the code is deposited on Zenodo
-\cite{nac_mcp_impl} for long-term reproducibility.
+The authors thank [name(s)] for [contribution]. All evaluation code, server
+implementations, and raw results are available at [repository URL].
 
 %% ── Mandatory disclosure statements ──────────────────────────────────────────
 \section*{Author Contributions}
-\textbf{Conceptualisation}: N.~Patel; \textbf{Methodology}: N.~Patel;
-\textbf{Software}: N.~Patel; \textbf{Formal analysis}: N.~Patel;
-\textbf{Writing---original draft}: N.~Patel;
-\textbf{Writing---review \& editing}: N.~Patel;
-\textbf{Visualisation}: N.~Patel.
+\textbf{Conceptualisation}: [Author]; \textbf{Methodology}: [Author];
+\textbf{Software}: [Author]; \textbf{Formal analysis}: [Author];
+\textbf{Writing---original draft}: [Author];
+\textbf{Writing---review \& editing}: [Author];
+\textbf{Visualisation}: [Author].
 (CRediT taxonomy: \url{https://credit.niso.org})
 
 \section*{Conflict of Interest Statement}
@@ -1837,11 +1782,10 @@ commercial or financial relationships that could be construed as a potential
 conflict of interest.
 
 \section*{Data Availability Statement}
-All code, evaluation scripts, server implementations, and raw result files
-(\texttt{eval\_results.json}, \texttt{ablation\_results.json},
-\texttt{stress\_results.json}) are publicly available in the GitHub repository
-cited as \cite{nac_mcp_impl}. A permanent, versioned archive is deposited on
-Zenodo to ensure long-term availability independent of the GitHub repository.
+The datasets generated and analysed during this study are available from the
+corresponding author upon reasonable request. Evaluation scripts, server
+implementations, and raw results are available at the repository linked in the
+Acknowledgments.
 
 \section*{Ethics Statement}
 This study did not involve human participants, animal subjects, personal data,
@@ -1855,13 +1799,6 @@ funding agency in the public, commercial, or not-for-profit sectors.]
 
 %% ============================================================
 \begin{thebibliography}{99}
-
-\bibitem{nac_mcp_impl}
-N.~Patel,
-``RFC 8693 NAC for MCP: Reference Implementation and Evaluation Code,''
-GitHub repository, 2025.
-[Online]. Available: \url{[GitHub repository URL]}.
-Archived: \url{[Zenodo DOI URL]}
 
 \bibitem{mcp_spec}
 Anthropic, ``Model Context Protocol Specification,'' Nov.\ 2024.

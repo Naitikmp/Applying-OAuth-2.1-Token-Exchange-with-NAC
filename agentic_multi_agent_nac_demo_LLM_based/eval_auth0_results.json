@@ -1,0 +1,532 @@
+{
+  "meta": {
+    "timestamp": "2026-04-02T03:53:48Z",
+    "n_rounds": 30,
+    "auth0_domain": "dev-j7t2v87fqtqpr3cq.us.auth0.com",
+    "python_version": "3.10.5 (tags/v3.10.5:f377153, Jun  6 2022, 16:14:13) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "t_critical_29": 2.045
+  },
+  "latency": {
+    "auth0_acquisition_ms": {
+      "mean": 417.69,
+      "std": 108.74,
+      "ci95": 40.6,
+      "p50": 391.34,
+      "p95": 609.41,
+      "p99": 926.05,
+      "min": 338.49,
+      "max": 926.05
+    },
+    "exchange_total_ms": {
+      "mean": 47.86,
+      "std": 96.37,
+      "ci95": 35.98,
+      "p50": 28.86,
+      "p95": 37.18,
+      "p99": 557.84,
+      "min": 27.02,
+      "max": 557.84
+    },
+    "per_exchange_ms": {
+      "mean": 11.94,
+      "std": 48.09,
+      "ci95": 8.98,
+      "p50": 7.2,
+      "p95": 13.1,
+      "p99": 15.47,
+      "min": 6.12,
+      "max": 534.06
+    },
+    "total_ms": {
+      "mean": 465.55,
+      "std": 156.33,
+      "ci95": 58.37,
+      "p50": 420.37,
+      "p95": 953.59,
+      "p99": 1070.25,
+      "min": 365.7,
+      "max": 1070.25
+    }
+  },
+  "baseline_comparison": {
+    "internal_baseline_mean_ms": null,
+    "internal_secure_mean_ms": null,
+    "auth0_total_mean_ms": 465.55,
+    "overhead_vs_baseline_pct": null
+  },
+  "attacks": {
+    "a1_scope_escalation": {
+      "blocked": 30,
+      "total": 30,
+      "rate_pct": 100.0
+    },
+    "a2_audience_mismatch": {
+      "blocked": 30,
+      "total": 30,
+      "rate_pct": 100.0
+    },
+    "a3_token_replay": {
+      "blocked": 30,
+      "total": 30,
+      "rate_pct": 100.0
+    },
+    "a4_identity_chain": {
+      "visible": 30,
+      "total": 30,
+      "rate_pct": 100.0
+    }
+  },
+  "raw_rounds": [
+    {
+      "auth0_ms": 512.4,
+      "exchange_ms_each": [
+        534.06,
+        7.78,
+        7.88,
+        8.02
+      ],
+      "exchange_ms_total": 557.84,
+      "total_ms": 1070.25,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 420.17,
+      "exchange_ms_each": [
+        7.61,
+        6.54,
+        7.69,
+        14.91
+      ],
+      "exchange_ms_total": 36.87,
+      "total_ms": 457.04,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 375.16,
+      "exchange_ms_each": [
+        7.61,
+        6.41,
+        8.18,
+        6.48
+      ],
+      "exchange_ms_total": 28.8,
+      "total_ms": 403.96,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 402.34,
+      "exchange_ms_each": [
+        7.34,
+        6.42,
+        7.55,
+        6.64
+      ],
+      "exchange_ms_total": 28.04,
+      "total_ms": 430.38,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 416.79,
+      "exchange_ms_each": [
+        6.91,
+        6.5,
+        6.85,
+        6.65
+      ],
+      "exchange_ms_total": 27.02,
+      "total_ms": 443.81,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 413.16,
+      "exchange_ms_each": [
+        10.64,
+        6.35,
+        7.43,
+        7.23
+      ],
+      "exchange_ms_total": 31.82,
+      "total_ms": 444.98,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 386.76,
+      "exchange_ms_each": [
+        7.48,
+        6.52,
+        7.42,
+        7.1
+      ],
+      "exchange_ms_total": 28.62,
+      "total_ms": 415.37,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 382.68,
+      "exchange_ms_each": [
+        7.83,
+        6.91,
+        7.33,
+        6.68
+      ],
+      "exchange_ms_total": 28.86,
+      "total_ms": 411.55,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 609.41,
+      "exchange_ms_each": [
+        7.2,
+        6.27,
+        7.59,
+        6.93
+      ],
+      "exchange_ms_total": 28.1,
+      "total_ms": 637.51,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 417.34,
+      "exchange_ms_each": [
+        7.26,
+        6.23,
+        7.49,
+        7.77
+      ],
+      "exchange_ms_total": 28.84,
+      "total_ms": 446.18,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 387.83,
+      "exchange_ms_each": [
+        7.42,
+        6.8,
+        7.58,
+        6.76
+      ],
+      "exchange_ms_total": 28.64,
+      "total_ms": 416.47,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 354.52,
+      "exchange_ms_each": [
+        7.52,
+        7.08,
+        7.74,
+        6.9
+      ],
+      "exchange_ms_total": 29.34,
+      "total_ms": 383.86,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 406.24,
+      "exchange_ms_each": [
+        6.94,
+        7.06,
+        7.28,
+        7.02
+      ],
+      "exchange_ms_total": 28.4,
+      "total_ms": 434.64,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 379.08,
+      "exchange_ms_each": [
+        7.34,
+        7.78,
+        7.23,
+        13.57
+      ],
+      "exchange_ms_total": 36.01,
+      "total_ms": 415.09,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 401.19,
+      "exchange_ms_each": [
+        7.53,
+        7.15,
+        7.43,
+        6.25
+      ],
+      "exchange_ms_total": 28.75,
+      "total_ms": 429.94,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 440.17,
+      "exchange_ms_each": [
+        6.85,
+        7.91,
+        13.1,
+        7.81
+      ],
+      "exchange_ms_total": 35.77,
+      "total_ms": 475.94,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 411.35,
+      "exchange_ms_each": [
+        8.06,
+        6.3,
+        6.89,
+        6.94
+      ],
+      "exchange_ms_total": 28.29,
+      "total_ms": 439.65,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 926.05,
+      "exchange_ms_each": [
+        6.54,
+        7.08,
+        7.2,
+        6.63
+      ],
+      "exchange_ms_total": 27.54,
+      "total_ms": 953.59,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 338.49,
+      "exchange_ms_each": [
+        7.0,
+        6.39,
+        7.23,
+        6.48
+      ],
+      "exchange_ms_total": 27.2,
+      "total_ms": 365.7,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 354.84,
+      "exchange_ms_each": [
+        7.27,
+        7.15,
+        8.68,
+        6.55
+      ],
+      "exchange_ms_total": 29.83,
+      "total_ms": 384.67,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 382.27,
+      "exchange_ms_each": [
+        6.31,
+        6.45,
+        12.81,
+        7.89
+      ],
+      "exchange_ms_total": 33.57,
+      "total_ms": 415.83,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 390.28,
+      "exchange_ms_each": [
+        7.39,
+        7.54,
+        7.34,
+        6.86
+      ],
+      "exchange_ms_total": 29.25,
+      "total_ms": 419.52,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 346.29,
+      "exchange_ms_each": [
+        6.88,
+        7.32,
+        13.48,
+        7.13
+      ],
+      "exchange_ms_total": 34.92,
+      "total_ms": 381.21,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 391.06,
+      "exchange_ms_each": [
+        6.76,
+        7.5,
+        7.49,
+        6.82
+      ],
+      "exchange_ms_total": 28.67,
+      "total_ms": 419.73,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 379.55,
+      "exchange_ms_each": [
+        7.49,
+        6.12,
+        7.31,
+        6.68
+      ],
+      "exchange_ms_total": 27.68,
+      "total_ms": 407.23,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 391.34,
+      "exchange_ms_each": [
+        7.8,
+        7.16,
+        6.66,
+        15.47
+      ],
+      "exchange_ms_total": 37.18,
+      "total_ms": 428.53,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 393.28,
+      "exchange_ms_each": [
+        7.12,
+        6.4,
+        6.63,
+        6.85
+      ],
+      "exchange_ms_total": 27.09,
+      "total_ms": 420.37,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 369.47,
+      "exchange_ms_each": [
+        6.97,
+        12.62,
+        6.75,
+        6.77
+      ],
+      "exchange_ms_total": 33.2,
+      "total_ms": 402.67,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 392.13,
+      "exchange_ms_each": [
+        8.05,
+        7.04,
+        7.25,
+        7.6
+      ],
+      "exchange_ms_total": 30.04,
+      "total_ms": 422.16,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    },
+    {
+      "auth0_ms": 358.98,
+      "exchange_ms_each": [
+        6.27,
+        7.19,
+        8.61,
+        7.55
+      ],
+      "exchange_ms_total": 29.72,
+      "total_ms": 388.7,
+      "a1_blocked": true,
+      "a2_blocked": true,
+      "a3_blocked": true,
+      "a4_visible": true
+    }
+  ]
+}

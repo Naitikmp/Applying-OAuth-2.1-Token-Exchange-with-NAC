@@ -111,31 +111,48 @@ to MCP Agentic Workflows:\\
 An Architectural Pattern for Secure Delegation}
 
 \author{\IEEEauthorblockN{Naitik Patel}
-\IEEEauthorblockA{Independent Researcher\\
-naitikpatel044@gmail.com}}
+\IEEEauthorblockA{\\
+[Ahmedabad, India]}}
 
 \maketitle
-
 %% ============================================================
 \begin{abstract}
-The Model Context Protocol (MCP) has emerged as the standard interface for
-connecting large language model agents to downstream tool services. A pervasive
-security anti-pattern---\textit{token passthrough}---causes orchestrating hubs
-to forward the user's OAuth access token unchanged to every downstream service,
-simultaneously violating audience binding, scope attenuation, and delegation
-chain visibility, constituting the \textit{Confused Deputy Problem}. We propose
-an architectural pattern based on RFC~8693 (OAuth~2.0 Token Exchange) with
-Nested Actor Claims (NAC), in which each delegation hop issues a fresh,
-narrowly scoped child token valid only for the target service. We construct a
-reference implementation and evaluate it against four concrete attack vectors
-using an ablation study across multiple enforcement configurations, validated
-against a live identity provider. The evaluation confirms that the pattern
-eliminates all identified attack vectors, that each of the three security
-properties is independently necessary, and that per-hop overhead scales
-linearly with chain depth, adding only modest overhead that is projected to
-remain in the single-digit to low-double-digit percentage range in typical
-production deployments. The pattern is authorization-server-agnostic and
-requires no changes to the agent layer.
+\textbf{Background:}
+The Model Context Protocol (MCP) has become the standard interface for connecting
+large language model (LLM) agents to downstream tool services. A pervasive
+security anti-pattern \textit{token passthrough} causes orchestrating hubs to
+forward the user's original OAuth access token unchanged to every downstream
+service. We show that this practice simultaneously violates three independent
+security properties: audience binding, scope attenuation, and delegation chain
+visibility, collectively constituting the \textit{Confused Deputy Problem}.
+
+\textbf{Methods:}
+We propose an architectural pattern based on RFC~8693 (OAuth~2.0 Token Exchange)
+with Nested Actor Claims (NAC). Under this pattern, each delegation hop issues a
+fresh child token carrying a service-specific audience, an attenuated scope, a
+verifiable \texttt{act} chain, and a one-time-use identifier. We construct a
+reference implementation with two parallel server stacks (baseline and NAC-secured)
+and evaluate them against four concrete attack vectors with a 720-trial ablation
+study across six enforcement configurations. The sidecar integration path is
+validated end-to-end against a live Auth0 tenant ($N=30$).
+
+\textbf{Results:}
+The NAC pattern achieves a 100\% attack block rate across all scenarios in all
+30 trials, with non-overlapping 95\% confidence intervals confirming statistical
+significance. The ablation study confirms that each of the three security
+properties is independently necessary no partial combination blocks all four
+attacks. Per-hop cryptographic overhead measures $\approx 2.15$\,ms (one
+RSA-2048 signing operation plus one revocation store update), yielding $O(k)$
+total overhead for a $k$-hop delegation chain, with $R^2 = 0.9999$ linearity.
+End-to-end measured overhead is $+44.5$\,ms ($+35.6\%$) over a single-machine
+baseline of $125.1 \pm 3.7$\,ms.
+
+\textbf{Conclusions:}
+The RFC~8693 NAC pattern provides cryptographically grounded, measurable, and
+deployable security for MCP agentic workflows by construction. Production
+deployment overhead is projected at $+7$--$15\%$ relative to an insecure
+baseline. The pattern is authorization-server-agnostic---confirmed end-to-end with a live
+Auth0 tenant and requires no changes to the agent layer.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -148,7 +165,7 @@ Confused Deputy, Multi-Agent AI, Delegation Chain, Agentic Security, OWASP GenAI
 \noindent\textit{\textbf{Plain Language Summary:}}
 \textit{AI assistants increasingly call multiple services on a user's behalf,
 carrying a security credential called an OAuth token. A common
-shortcut---passing the same token to every service unchanged---is insecure: it
+shortcut passing the same token to every service unchanged is insecure: it
 gives each service far more access than it needs, enables attackers to misuse the
 token across service boundaries, and leaves no audit trail showing which AI agent
 made each call. We describe and evaluate a standards-based fix: before calling
@@ -181,7 +198,7 @@ must somehow convey appropriate authorization to each downstream worker.
 
 The natural, default approach is \textbf{token passthrough}: the hub forwards
 the original user token unchanged to every service it calls. Services respond,
-and workflows complete---so the problem is invisible at runtime. However,
+and workflows complete so the problem is invisible at runtime. However,
 token passthrough is deeply insecure. The MCP security specification \cite{mcp_security} explicitly
 identifies token passthrough as an \textit{anti-pattern} that ``creates confused
 deputy risks,'' and the Coalition for Secure AI (CoSAI) whitepaper on MCP
@@ -200,22 +217,17 @@ gaps.
 
 \textbf{Contributions:}
 \begin{enumerate}
-  \item \textbf{Formal problem characterisation.} We define three independent
-        security properties (P1 audience binding, P2 scope attenuation, P3
-        delegation chain visibility) and prove that token passthrough violates
-        all three simultaneously (Section~\ref{sec:problem}).
-  \item \textbf{Formal solution with proofs.} We propose the RFC~8693 NAC
-        architectural pattern and prove, by construction, that it satisfies
-        P1--P3 and prevents token replay (Theorems~1--4,
-        Section~\ref{sec:solution}).
-  \item \textbf{Theoretical overhead bound.} We prove that per-hop overhead is
-        $O(k)$ sequentially and $O(1)$ in wall-clock time under concurrent
-        issuance, with an irreducible constant of one RSA signing operation
-        plus one revocation store write (Proposition~1,
-        Section~\ref{sec:solution}).
-  \item \textbf{Empirical validation.} A reference implementation and 720-trial
-        ablation study confirm all four theorems and the overhead bound, with
-        zero false positives and $R^2 = 0.9999$ linearity (Section~\ref{sec:eval}).
+  \item We formally characterise the token passthrough anti-pattern and the three
+        independent security properties it violates
+        (Section~\ref{sec:problem}).
+  \item We propose the \textit{RFC 8693 NAC architectural pattern} for MCP
+        multi-agent delegation and prove it satisfies all three properties by
+        construction (Section~\ref{sec:solution}).
+  \item We present a reference implementation and evaluate it against four
+        concrete attack vectors with a 720-trial ablation study confirming
+        property independence (Section~\ref{sec:eval}).
+  \item We derive theoretical bounds on per-hop overhead and validate them
+        empirically (Section~\ref{sec:eval}).
 \end{enumerate}
 
 %% ============================================================
@@ -253,7 +265,7 @@ authorization flow: the MCP client discovers the authorization server via
 Protected Resource Metadata (PRM), performs an OAuth 2.1 authorization code flow
 with PKCE, obtains an access token, and uses it to call the MCP server. This flow
 governs the \textit{client-to-hub} boundary only. It does not specify how the hub
-should authorize its own calls to downstream worker services---the gap this paper
+should authorize its own calls to downstream worker services the gap this paper
 fills.
 
 \begin{figure*}[!ht]
@@ -353,7 +365,7 @@ Resource Metadata, performs the OAuth 2.1 PKCE authorization code flow, and
 obtains an access token. Solid arrows are requests; dashed arrows are
 responses. Critically, \textbf{this flow covers only the client-to-hub
 authorization boundary}. How the hub authorizes its own calls to downstream
-worker services is unspecified---the delegation security gap this paper
+worker services is unspecified the delegation security gap this paper
 addresses.}
 \label{fig:mcp_std_auth}
 \end{figure*}
@@ -373,15 +385,16 @@ authorized subject (\texttt{sub}), audience (\texttt{aud}), and permission set
 
 RFC 9068 \cite{rfc9068} profiles access tokens as signed JSON Web Tokens
 (JWTs) \cite{rfc7519}, enabling compact, cryptographically verifiable
-credential exchange. Four JWT claims are central to this paper.
-The \textbf{\texttt{aud}} claim identifies the intended recipient; a receiver
-MUST reject tokens not addressed to it \cite{rfc9068}.
-The \textbf{\texttt{scope}} claim carries the set of permissions the token grants.
-The \textbf{\texttt{jti}} claim provides a unique per-token identifier that
-enables revocation and replay prevention.
-Finally, the \textbf{\texttt{act}} claim (defined by RFC 8693) records the
-identity of the party exercising delegated authority, forming a verifiable
-delegation chain.
+credential exchange. The JWT claims relevant to this paper are:
+\begin{itemize}
+  \item \textbf{\texttt{aud}}: the intended recipient(s); a receiver MUST reject
+        tokens not intended for it \cite{rfc9068};
+  \item \textbf{\texttt{scope}}: the set of permissions the token carries;
+  \item \textbf{\texttt{jti}}: a unique identifier for the token, enabling
+        revocation and replay prevention;
+  \item \textbf{\texttt{act}}: the actor claim (RFC 8693), recording the identity
+        of the party exercising delegated authority.
+\end{itemize}
 
 \subsection{RFC 8693: OAuth 2.0 Token Exchange}
 
@@ -395,7 +408,7 @@ subject; the intermediate is invisible to downstream services.
 \textbf{Delegation}: The acting party remains distinguishable from the subject.
 The new token retains the subject identity while recording the actor in the
 \texttt{act} claim. For agentic workflows, delegation is the appropriate
-choice---the user identity ($\texttt{sub}$) is preserved for accountability while
+choice the user identity ($\texttt{sub}$) is preserved for accountability while
 the orchestrating agent is recorded as the actor.
 
 RFC 8693 defines the scope non-escalation invariant: the requested scope of a
@@ -425,25 +438,27 @@ RedHat \cite{rfc8693_deploy}.
 
 RFC 7009 \cite{rfc7009} defines OAuth 2.0 token revocation. For per-request
 one-time-use semantics where a token's \texttt{jti} must be revoked after a
-single use---the revocation check must be cross-process and low-latency. The
+single use the revocation check must be cross-process and low-latency. The
 canonical architecture is an in-memory key-value store with TTL-based expiry:
 the record is written after issuance (\textit{register}), queried before each
 use (\textit{check}), and overwritten after consumption (\textit{revoke}). Any
-implementation satisfying this interface---whether managed (e.g., AWS
-ElastiCache, Google Memorystore) or self-hosted (e.g., Redis, DragonflyDB)---
+implementation satisfying this interface whether managed (e.g., AWS
+ElastiCache, Google Memorystore) or self-hosted (e.g., Redis, DragonflyDB) 
 satisfies the requirement. The specific technology choice affects operational
 latency and availability, not security semantics.
 
 \subsection{OWASP Generative AI Top 10 (2025)}
 
 The OWASP Top 10 for Large Language Model Applications 2025 \cite{owasp_genai}
-identifies the most critical LLM security risks. Two entries are directly
-relevant to this work. \textbf{LLM06:2025 Excessive Agency} arises when agents
-are granted more permissions or capability than their task requires---this is the
-root cause of the scope escalation attack vector studied in this paper.
-\textbf{LLM01:2025 Prompt Injection} describes attacker-controlled input that
-causes an agent to exercise legitimately authorized tokens in unauthorised ways,
-an effect that is significantly amplified when tokens carry excess scopes.
+identifies the most critical LLM security risks. Relevant to this work:
+\begin{itemize}
+  \item \textbf{LLM06:2025 Excessive Agency}: Agents granted more permissions
+        or capability than their task requires the root cause of the scope
+        escalation attack vector.
+  \item \textbf{LLM01:2025 Prompt Injection}: Attacker-controlled input causing
+        an agent to exercise legitimately authorized tokens in unauthorised ways,
+        amplified when tokens carry excess scopes.
+\end{itemize}
 
 
 %% ============================================================
@@ -567,13 +582,17 @@ indistinguishable in the audit trail.
 
 \subsection{The Confused Deputy Problem in MCP}
 
-Hardy's 1988 analysis \cite{hardy1988} applies directly. The \textbf{principal}
-is user $u$, who delegated authority $T_0$ to $\mathcal{H}$. The \textbf{deputy}
-is hub $\mathcal{H}$, which holds $T_0$ and calls workers on the user's behalf.
-The \textbf{confused action} occurs when $\mathcal{H}$ presents $T_0$ to
-worker $W_i$, where it carries capabilities that $u$ never intended for $W_i$.
-The \textbf{adversary} is any agent or prompt injection payload that exploits
-the excess authority embedded in $T_0$.
+Hardy's 1988 analysis \cite{hardy1988} applies directly:
+
+\begin{itemize}
+  \item \textbf{Principal}: User $u$, who delegated authority $T_0$ to
+        $\mathcal{H}$.
+  \item \textbf{Deputy}: Hub $\mathcal{H}$, which holds $T_0$ and calls workers.
+  \item \textbf{Confused action}: $\mathcal{H}$ presents $T_0$ to $W_i$, where
+        it carries capabilities $u$ never intended for $W_i$.
+  \item \textbf{Adversary}: Any agent or prompt injection that exploits the
+        excess authority in $T_0$.
+\end{itemize}
 
 The MCP specification \cite{mcp_security} states: ``Servers SHOULD NOT pass
 tokens received from clients to other servers, as this creates confused deputy
@@ -582,10 +601,7 @@ risks.''
 \subsection{Four Concrete Attack Vectors}
 
 \begin{table}[h]
-\caption{Formal attack vector definitions. Each attack exploits the absence of
-one or more security properties (P1~=~audience binding, P2~=~scope attenuation,
-P3~=~delegation chain visibility). The ``Requires'' column identifies which
-property must be absent for the attack to succeed.}
+\caption{Formal attack vector definitions}
 \label{tab:attack_formal}
 \centering
 \footnotesize
@@ -612,174 +628,8 @@ A4 & Audit log lacks delegation chain; calls cannot be attributed to agent
 \label{sec:solution}
 %% ============================================================
 
-%% ---- FIGURE 5: Side-by-side sequence comparison (full width) ----
-%% Placed at the very top of the section per IEEEtran float rules.
-%% Left panel: token passthrough (insecure baseline).
-%% Right panel: RFC 8693 NAC (secure pattern).
-\begin{figure*}[!ht]
-\centering
-\begin{tikzpicture}[
-  every node/.style={font=\scriptsize},
-  x=1cm, y=1cm,
-]
-
-%% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-%%  LEFT PANEL — Token Passthrough (Insecure Baseline)
-%% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-\pgfmathsetmacro{\lxU}{1.0}  %% User
-\pgfmathsetmacro{\lxH}{3.4}  %% Hub
-\pgfmathsetmacro{\lxW}{6.2}  %% Workers (W_1 … W_k combined)
-
-%% Panel title
-\node[font=\small\bfseries, color=C_WARN] at (3.65, 0.65)
-  {Token Passthrough (Insecure)};
-
-%% Actor boxes
-\node[SD/actor, minimum width=1.8cm] at (\lxU,0) {User $u$};
-\node[SD/actor, minimum width=1.8cm] at (\lxH,0) {Hub $\mathcal{H}$};
-\node[SD/actor, minimum width=2.1cm] at (\lxW,0)
-  {Workers\\$W_1 \ldots W_k$};
-
-%% Lifelines
-\draw[SD/life] (\lxU,-0.30) -- (\lxU,-8.2);
-\draw[SD/life] (\lxH,-0.30) -- (\lxH,-8.2);
-\draw[SD/life] (\lxW,-0.30) -- (\lxW,-8.2);
-
-%% 1. User → Hub: root token T0
-\draw[SD/fwd] (\lxU,-1.1) -- (\lxH,-1.1);
-\node[SD/lbl, above] at ({(\lxU+\lxH)/2},-1.1)
-  {Bearer $T_0$\;(\texttt{aud}$=\mathcal{H}$,\;scope$=S_0$)};
-
-%% 2. Hub → Workers: same T0 forwarded unchanged (first worker)
-\draw[SD/fwd, color=C_WARN, thick] (\lxH,-2.4) -- (\lxW,-2.4);
-\node[SD/lbl, above, color=C_WARN] at ({(\lxH+\lxW)/2},-2.4)
-  {$T_0$ unchanged \textemdash{} all workers};
-\node[font=\tiny, color=C_WARN, align=center]
-  at ({(\lxH+\lxW)/2},-2.85)
-  {\texttt{aud}$=\mathcal{H}$,\;scope$=S_0$ (full)};
-
-%% Vertical dots (represents repeated passthrough to each worker)
-\node[font=\large, color=gray] at ({(\lxH+\lxW)/2},-3.7) {$\vdots$};
-
-%% 3. Hub → Workers: same T0 (k-th call)
-\draw[SD/fwd, color=C_WARN, thick] (\lxH,-4.6) -- (\lxW,-4.6);
-\node[SD/lbl, above, color=C_WARN] at ({(\lxH+\lxW)/2},-4.6)
-  {$T_0$ unchanged \textemdash{} $k$-th worker};
-
-%% Attack consequence box
-\node[draw=C_WARN, fill=C_WARN!8, rounded corners=3pt,
-      font=\tiny, align=left, inner sep=4pt, text width=5.6cm]
-  at (3.65,-6.5)
-  {\textbf{Consequences:}\\
-   A1: any worker sees full scope $S_0$\\
-   A2: $T_0$ accepted at any $W_j$ (wrong audience)\\
-   A3: $T_0$ reusable across sessions\\
-   A4: no delegation chain; calls unattributable};
-
-%% Left panel border
-\draw[draw=C_WARN!70, dashed, thick, rounded corners=5pt]
-  (0.0,-8.2) rectangle (7.3,0.35);
-
-%% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-%%  VERTICAL DIVIDER
-%% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-\draw[thick, gray!45] (7.65, 0.8) -- (7.65,-8.5);
-
-%% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-%%  RIGHT PANEL — RFC 8693 NAC (Secure Pattern)
-%% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-\pgfmathsetmacro{\rxU}{8.8}   %% User
-\pgfmathsetmacro{\rxH}{11.0}  %% Hub
-\pgfmathsetmacro{\rxA}{13.7}  %% Auth Server
-\pgfmathsetmacro{\rxW}{16.4}  %% Workers
-
-%% Panel title
-\node[font=\small\bfseries, color=C_PAR] at (12.7, 0.65)
-  {RFC 8693 NAC (Secure)};
-
-%% Actor boxes
-\node[SD/actor, minimum width=1.8cm] at (\rxU,0) {User $u$};
-\node[SD/actor, minimum width=1.8cm] at (\rxH,0) {Hub $\mathcal{H}$};
-\node[SD/actor, minimum width=2.4cm] at (\rxA,0)
-  {Auth Server\\(RFC 8693)};
-\node[SD/actor, minimum width=2.1cm] at (\rxW,0)
-  {Workers\\$W_1 \ldots W_k$};
-
-%% Lifelines
-\draw[SD/life] (\rxU,-0.30) -- (\rxU,-8.2);
-\draw[SD/life] (\rxH,-0.30) -- (\rxH,-8.2);
-\draw[SD/life] (\rxA,-0.30) -- (\rxA,-8.2);
-\draw[SD/life] (\rxW,-0.30) -- (\rxW,-8.2);
-
-%% 1. User → Hub: root token T0
-\draw[SD/fwd] (\rxU,-1.1) -- (\rxH,-1.1);
-\node[SD/lbl, above] at ({(\rxU+\rxH)/2},-1.1)
-  {Bearer $T_0$\;(\texttt{aud}$=\mathcal{H}$,\;scope$=S_0$)};
-
-%% 2. Concurrent exchange — "par" combined fragment
-\draw[SD/par] (\rxH-0.25,-1.7) rectangle (\rxA+0.35,-4.1);
-\node[font=\tiny\bfseries, fill=white, inner sep=1.5pt, anchor=north west]
-  at (\rxH-0.25,-1.7) {par\;($i = 1\ldots k$, concurrent)};
-
-%% Hub → Auth: exchange request (per worker)
-\draw[SD/fwd, color=C_PAR!80!black] (\rxH,-2.35) -- (\rxA,-2.35);
-\node[SD/lbl, above, color=C_PAR!80!black] at ({(\rxH+\rxA)/2},-2.35)
-  {\texttt{POST /token/exchange}\;(\texttt{aud}$=W_i$,\;scope$=s_i$)};
-
-\node[font=\large, color=gray] at ({(\rxH+\rxA)/2},-3.0) {$\vdots$};
-\node[font=\tiny, color=gray, align=center]
-  at ({(\rxH+\rxA)/2},-3.45) {one request per worker, fired simultaneously};
-
-%% Auth Server: validates, signs child tokens
-\node[draw=C_BASE!55, fill=C_BASE!10, rounded corners=2pt,
-      font=\tiny, align=center, inner sep=3pt]
-  at (\rxA,-3.85)
-  {enforce $s_i \!\subseteq\! S_0$; sign $T_i$; register jti$_i$};
-
-%% Auth → Hub: child tokens returned
-\draw[SD/bck] (\rxA,-4.55) -- (\rxH,-4.55);
-\node[SD/lbl, above] at ({(\rxH+\rxA)/2},-4.55)
-  {$T_1,\ldots,T_k$: \texttt{aud}$=W_i$,\;scope$=s_i$,\;\texttt{act}$=\{\text{sub}:\mathcal{H}\}$};
-
-%% 3. Worker invocation — "loop" combined fragment
-\draw[SD/par] (\rxH-0.25,-5.1) rectangle (\rxW+0.25,-7.7);
-\node[font=\tiny\bfseries, fill=white, inner sep=1.5pt, anchor=north west]
-  at (\rxH-0.25,-5.1) {loop\;($i = 1\ldots k$)};
-
-%% Hub → Workers: Ti (unique per worker)
-\draw[SD/fwd, color=C_PAR] (\rxH,-5.75) -- (\rxW,-5.75);
-\node[SD/lbl, above, color=C_PAR] at ({(\rxH+\rxW)/2},-5.75)
-  {Bearer $T_i$\;(\texttt{aud}$=W_i$,\;scope$=s_i$,\;\texttt{act} chain)};
-
-%% Worker validation annotation
-\node[draw=C_PAR!55, fill=C_PAR!10, rounded corners=2pt,
-      font=\tiny, align=left, inner sep=3pt]
-  at (\rxW,-6.55)
-  {validate: \texttt{aud}, scope, act,\\jti (revoke after use)};
-
-%% Workers → Hub: tool result
-\draw[SD/bck] (\rxW,-7.3) -- (\rxH,-7.3);
-\node[SD/lbl, above] at ({(\rxH+\rxW)/2},-7.3) {tool result};
-
-%% Right panel border
-\draw[draw=C_PAR!70, dashed, thick, rounded corners=5pt]
-  (7.8,-8.2) rectangle (17.5,0.35);
-
-\end{tikzpicture}
-\caption{Side-by-side sequence comparison of token passthrough (left) and the
-RFC~8693 NAC pattern (right). In the baseline flow, the hub forwards the
-unchanged root token $T_0$ to all workers, simultaneously exposing attacks
-A1--A4. In the NAC flow, the hub exchanges $T_0$ for $k$ per-service child
-tokens at the authorization server (concurrent, \textit{par} fragment) before
-invoking any worker; each child token carries a unique audience, an attenuated
-scope, a verifiable \texttt{act} chain, and a one-time-use \texttt{jti},
-blocking all four attacks by construction.}
-\label{fig:seq_comparison}
-\end{figure*}
-
 \subsection{Pattern Overview}
 
-Figure~\ref{fig:seq_comparison} contrasts the two flows at a glance.
 Intuitively, the NAC pattern replaces a single all-access key with a set of
 single-use, room-specific keys: instead of handing the same master key to every
 service, the hub asks a trusted authority to cut a new key for each service,
@@ -906,34 +756,10 @@ to $\approx t_{\mathrm{exchange}}$ (the maximum across concurrent requests),
 subject to authorization server capacity. This is the basis for the
 ``parallel estimate'' in Section~\ref{sec:eval}.
 
-\begin{proposition}[\textbf{Overhead Bound}]
-\label{prop:overhead}
-For $k$ independent workers, sequential NAC overhead is $O(k)$ with a
-constant equal to one RSA signing operation plus one revocation store write
-per hop. Under concurrent issuance, wall-clock overhead collapses to $O(1)$
-relative to $k$, bounded by $t_{\mathrm{sign}} + t_{\mathrm{store}}$ --- the
-cost of a single exchange --- regardless of how many workers are invoked.
-\end{proposition}
-\begin{proof}
-Each child token exchange is a function solely of
-$(T_{\mathrm{root}},\, \mathrm{aud}_i,\, s_i)$. Because no exchange reads or
-modifies the output of any other exchange, the $k$ operations are fully
-independent --- there is no cross-exchange data dependency. Sequential
-execution therefore costs exactly $k \cdot (t_{\mathrm{sign}} +
-t_{\mathrm{store}} + t_{\mathrm{http}})$; concurrent execution via
-\texttt{asyncio.gather} or equivalent reduces the wall-clock component to
-$\max_i(t_{\mathrm{exchange},i})$, which approaches $t_{\mathrm{sign}} +
-t_{\mathrm{store}}$ when exchanges are dispatched simultaneously. The signing
-and store operations are cryptographically fixed-cost (RSA-2048 sign,
-sub-millisecond Redis write); only $t_{\mathrm{http}}$ varies with deployment
-topology and is eliminable via co-location of the authorization server with
-the hub.
-\end{proof}
-
 \subsection{N-Hop Delegation Chains}
 
-For hierarchical delegation---where $W_i$ must itself call a further downstream
-service---the pattern applies recursively:
+For hierarchical delegation where $W_i$ must itself call a further downstream
+service the pattern applies recursively:
 
 \begin{equation}
 T_k = \mathrm{Exchange}(T_{k-1},\;
@@ -951,9 +777,9 @@ $\text{alice} \to \mathcal{H} \to W_{\mathrm{cal}} \to W_{\mathrm{ext}}$.
 \subsection{NAC Token Exchange Sequence}
 
 Figure~\ref{fig:nac_seq} provides the full UML sequence diagram for the NAC
-token exchange flow. The diagram uses four actors---Alice, the hub
+token exchange flow. The diagram uses four actors Alice, the hub
 $\mathcal{H}$, the authorization server, and a representative worker
-$W_i$---to show the general $k$-worker pattern. Phase~2 uses a ``par''
+$W_i$ to show the general $k$-worker pattern. Phase~2 uses a ``par''
 combined fragment for the concurrent exchanges; Phase~3 uses a ``loop''
 fragment for the sequential worker invocations, each with its own
 validation and \texttt{jti} revocation step.
@@ -1170,22 +996,24 @@ remaining lifetime to prevent races.
 
 \subsection{Architectural Requirements for Adopters}
 
-The NAC pattern places five requirements on the deployment. The
-\textbf{authorization server} must be any OAuth 2.1-compliant server that
-exposes a token exchange endpoint conforming to RFC 8693; existing enterprise
-identity providers (Keycloak, Auth0, ZITADEL, Authlete, and Microsoft Entra via
-the OBO flow) support this natively \cite{rfc8693_deploy}. The
-\textbf{orchestrator} must perform one RFC 8693 exchange per worker invocation,
-firing exchanges concurrently for independent workers
-(Equation~\ref{eq:concurrent}). Each \textbf{worker} must validate the
-\texttt{aud}, \texttt{scope}, \texttt{act} chain, and \texttt{jti} on every
-incoming request, and must write the \texttt{jti} to the revocation store after
-successful use. The \textbf{revocation store} must support sub-millisecond
-read/write of \texttt{jti} records shared across processes with TTL-based
-expiry. Finally, \textbf{key separation} must be enforced: only the
-authorization server holds the RSA private signing key; workers hold the
-corresponding public key and are physically prevented from loading the private
-key.
+The NAC pattern places five requirements on the deployment:
+
+\begin{enumerate}
+  \item \textbf{Authorization server}: Any OAuth 2.1-compliant server supporting
+        a token exchange endpoint conforming to RFC 8693. Existing enterprise
+        identity providers (Keycloak, Auth0, ZITADEL, Authlete, Microsoft Entra
+        via OBO flow) support this natively \cite{rfc8693_deploy}.
+  \item \textbf{Orchestrator}: Must perform one RFC 8693 exchange per worker
+        invocation, firing them concurrently for independent workers
+        (Equation~\ref{eq:concurrent}).
+  \item \textbf{Workers}: Must validate \texttt{aud}, \texttt{scope},
+        \texttt{act} chain, and \texttt{jti} on every request; must write the
+        \texttt{jti} to the revocation store after successful use.
+  \item \textbf{Revocation store}: Must support sub-millisecond read/write of
+        \texttt{jti} records shared across processes with TTL-based expiry.
+  \item \textbf{Key separation}: Only the authorization server holds the private
+        signing key. Workers hold the public key only.
+\end{enumerate}
 
 No requirement is placed on programming language, web framework, or specific
 runtime. The pattern applies equally to Java, C\#, Python, Node.js, Go, or any
@@ -1197,15 +1025,13 @@ language with an HTTP client and JWT library.
 \label{sec:impl}
 %% ============================================================
 
-Theorems~1--4 and Proposition~\ref{prop:overhead} establish the security and
-overhead properties of the NAC pattern by construction. To provide empirical
-confirmation, we constructed a minimal reference implementation: two parallel
-server stacks sharing identical six-component topology, differing only in
-whether RFC 8693 exchange and token validation are enforced. The implementation
-is intentionally minimal---each component is a single Python file using FastAPI
-and standard libraries---so that every security-relevant decision is
-immediately auditable and the distance between theory and code is as small as
-possible.
+To evaluate the pattern empirically, we constructed two parallel server stacks:
+a \textit{baseline} (token passthrough) stack and a \textit{secure} (NAC) stack.
+Both stacks instantiate the same six logical components; the difference is whether
+RFC 8693 exchange is enforced at the authorization server and whether validation
+is enforced at workers. The implementation is intentionally minimal each
+component is a single Python file using FastAPI and standard libraries so that
+the security-relevant logic is immediately auditable without framework noise.
 
 \subsection{Component Architecture}
 
@@ -1225,7 +1051,7 @@ properties (P1--P3 plus replay prevention) are enforced and the \texttt{jti} is
 revoked after first use. In the baseline, validation is omitted.
 
 \textbf{Revocation store}: We use Redis \cite{redis} as the revocation store
-in our reference implementation---a widely deployed in-memory key-value server
+in our reference implementation a widely deployed in-memory key-value server
 that provides the sub-millisecond operation latency required for per-request
 validation. Key schema:
 
@@ -1242,22 +1068,23 @@ substituted; the security semantics are unaffected.
 
 \textbf{Agent planner}: The evaluation uses a rule-based planner for
 reproducibility. An optional real LLM planner demonstrates that the NAC pattern
-is transparent to the model layer---the LLM receives only tool names and results;
+is transparent to the model layer the LLM receives only tool names and results;
 token exchange occurs at the transport layer.
 
 \subsection{Key Security Invariants}
 
-Three invariants are enforced by construction in the reference implementation.
-\textbf{Key separation}: only the authorization server process holds the
-RSA-2048 private signing key; worker processes reject any attempt to load the
-private key, preventing token forgery even under worker compromise.
-\textbf{Short-lived child tokens}: child tokens carry a significantly shorter
-TTL than the root token, minimising the replay window in the event that a
-\texttt{jti} revocation record is lost.
-\textbf{Typed error codes}: validation failures return structured string
-constants (\texttt{WRONG\_AUDIENCE}, \texttt{SCOPE\_INSUFFICIENT},
-\texttt{TOKEN\_REPLAY}), enabling the evaluation harness to distinguish
-security rejections from implementation bugs.
+\begin{itemize}
+  \item \textbf{Key separation}: Only the authorization server process holds the
+        RSA-2048 private signing key. Worker processes reject any attempt to load
+        the private key, preventing token forgery even under worker compromise.
+  \item \textbf{Short-lived child tokens}: Child tokens carry a significantly
+        shorter TTL than the root token, minimising the replay window if a
+        \texttt{jti} revocation record is lost.
+  \item \textbf{Typed error codes}: Validation failures return structured codes
+        (\texttt{WRONG\_AUDIENCE}, \texttt{SCOPE\_INSUFFICIENT},
+        \texttt{TOKEN\_REPLAY}) enabling the evaluation harness to distinguish
+        security rejections from implementation bugs.
+\end{itemize}
 
 \subsection{Port Layout}
 
@@ -1307,9 +1134,7 @@ no mocking of cryptographic operations.
 \subsection{Attack Mitigation}
 
 \begin{table}[h]
-\caption{Attack mitigation results ($N=30$ trials per cell). Each cell reports
-the number of trials in which the attack succeeded. A result of 0/30 indicates
-complete blocking; 30/30 indicates the attack was unimpeded.}
+\caption{Attack mitigation results ($N=30$ per cell)}
 \label{tab:attacks}
 \centering
 \footnotesize
@@ -1327,15 +1152,9 @@ A4 & Attribution (audit) & 0\% attributed & 100\% & \textit{attribution rate} \\
 \end{table}
 
 The NAC pattern achieves a 100\% block rate across all attack vectors in all
-30~trials. These results are not surprising --- they are the expected
-consequence of Theorems~1--4. A1 is blocked because Theorem~2 (P2) guarantees
-scope attenuation is enforced before any child token is issued. A2 is blocked
-because Theorem~1 (P1) guarantees $\texttt{aud}(T_i) = \mathrm{AUDIENCE}(W_i)$
-by construction. A3 is blocked because Theorem~4 guarantees the \texttt{jti}
-is revoked after first use. A4 is resolved because Theorem~3 (P3) guarantees
-a cryptographically signed \texttt{act} chain in every child token. The
-100\% rate confirms that the implementation faithfully realises all four
-theorems with no edge cases.
+30~trials. The determinism of these results follows directly from the
+cryptographic proofs in Section~\ref{sec:solution}: each block is an assertion
+that a specific JWT claim does not match a required value.
 
 \subsection{Ablation Study: Property Independence}
 \label{sec:ablation}
@@ -1390,7 +1209,7 @@ Aud + Scope
 \bottomrule
 \multicolumn{9}{l}{{\scriptsize
   $^\dagger$\,Scope-only blocks A2 only when services use non-overlapping
-  scopes---not a general defence; see Section~\ref{sec:scope_caveat}.}}
+  scopes not a general defence; see Section~\ref{sec:scope_caveat}.}}
 \end{tabular}%
 }
 \end{table}
@@ -1416,7 +1235,7 @@ redundant; only Full NAC blocks all four attacks simultaneously.
 \subsubsection{Scope-Only and Lateral Movement}
 \label{sec:scope_caveat}
 Scope-only blocks A2 in our implementation because Calendar requires
-\texttt{calendar:read} and Docs requires \texttt{docs:read}---non-overlapping
+\texttt{calendar:read} and Docs requires \texttt{docs:read} non-overlapping
 scopes. A token issued for Calendar fails the Docs worker's scope check.
 However, if two services shared a scope (e.g., both accepted \texttt{data:read}),
 scope-only would fail to block A2. Audience binding is the correct,
@@ -1452,13 +1271,11 @@ Theor.\ concurrent bound$^\dagger$
 }
 \end{table}
 
-Proposition~\ref{prop:overhead} predicts that sequential overhead is $O(k)$
-and concurrent overhead approaches a constant. Table~\ref{tab:latency}
-confirms both predictions. The measured sequential overhead of $+35.6\%$
-($125.1 \pm 3.7$\,ms baseline vs.\ $169.6 \pm 4.7$\,ms secure; 95\% CI via
-$t_{29} = 2.045$) reflects a worst-case single-machine, single-worker
-authorization server with no co-location. The $\sigma$-ratio of $1.26\times$
-confirms that NAC overhead is predictable---the revocation store eliminates
+The measured overhead of $+35.6\%$ ($125.1 \pm 3.7$\,ms baseline vs.\
+$169.6 \pm 4.7$\,ms secure; 95\% CI computed via $t_{29} = 2.045$) reflects
+a single-machine, single-worker authorization server. The non-overlapping CI
+intervals confirm statistical significance. The $\sigma$-ratio of $1.26\times$
+confirms that NAC overhead is predictable the revocation store eliminates
 cross-process scheduling jitter. The theoretical concurrent bound of $+8.9\%$
 represents the expected latency with a multi-worker authorization server enabling
 truly parallel RSA signing.
@@ -1488,7 +1305,7 @@ Other overhead                      & $\approx 2$\,ms   & $\approx 4\%$  \\
 \end{table}
 
 The revocation store contributes only $\approx 2\%$ of total overhead. The
-dominant costs---RSA signing ($27\%$) and HTTP transport ($49\%$)---are
+dominant costs RSA signing ($27\%$) and HTTP transport ($49\%$) are
 reducible through standard production engineering: multi-worker authorization
 server for parallel signing, and a service mesh or Unix sockets for sub-ms
 inter-service transport.
@@ -1515,12 +1332,9 @@ inter-service transport.
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:hopcosts} empirically confirms the $O(k)$ bound of
-Proposition~\ref{prop:overhead}. Each additional delegation hop adds a
-constant $\approx 2.15$\,ms (one RSA-2048 sign plus one revocation store
-write) --- exactly the irreducible per-hop constant the proposition
-identifies. This linearity follows from the independence argument in the
-proof: each hop performs a constant-cost operation with no
+Each additional delegation hop adds a constant $\approx 2.15$\,ms (one RSA-2048
+signing operation plus one revocation store write). This linearity follows from
+first principles: each hop performs an independent constant-cost operation with no
 inter-hop dependency; the $R^2 = 0.9999$ fit over ten data points (not merely
 three) confirms $O(k)$ overhead, providing a reliable model for production
 capacity planning.
@@ -1533,9 +1347,7 @@ a 4-worker orchestration with concurrent issuance.
 \subsection{Token Size Overhead}
 
 \begin{table}[h]
-\caption{JWT token size overhead by delegation depth. Sizes are measured in bytes
-for the Base64url-encoded signed JWT. The ``vs Root'' column shows the incremental
-size increase relative to the root token $T_0$ at depth~0.}
+\caption{JWT token size by delegation depth}
 \label{tab:tokensizes}
 \centering
 \footnotesize
@@ -1543,7 +1355,7 @@ size increase relative to the root token $T_0$ at depth~0.}
 \toprule
 \textbf{Token} & \textbf{Bytes} & \textbf{vs Root} & \textbf{Depth} \\
 \midrule
-Root (0-hop)             & 732\,B & ---                    & 0 \\
+Root (0-hop)             & 732\,B &                      & 0 \\
 Child (1-hop, Calendar)  & 747\,B & $+15$\,B ($+2.0\%$)   & 1 \\
 Child (1-hop, Docs)      & 736\,B & $+4$\,B ($+0.5\%$)    & 1 \\
 Child (2-hop, Ext.\ API) & 792\,B & $+60$\,B ($+8.2\%$)   & 2 \\
@@ -1588,7 +1400,7 @@ Sidecar code delta   & $<60$ lines        & vs.\ internal OAuth server \\
 \end{table}
 
 All four attacks were blocked in 100\% of 30 trials with real Auth0 M2M root
-tokens---identical to the internal-stack results. The per-hop sidecar cost
+tokens identical to the internal-stack results. The per-hop sidecar cost
 ($\approx 7$\,ms) exceeds the $2.15$\,ms direct-call figure by approximately
 $5$\,ms of HTTP loopback overhead to the sidecar process; the intrinsic
 RSA-2048 cryptographic cost is unchanged. The Auth0 token acquisition latency
@@ -1631,7 +1443,7 @@ attenuation \textit{incidentally} blocks lateral movement when services use
 non-overlapping scopes, but this is not a general, topology-independent defence.
 The principled defence against lateral movement is audience binding. This
 finding empirically demonstrates that the three properties are not
-substitutable---partial enforcement that works in one deployment topology may fail
+substitutable partial enforcement that works in one deployment topology may fail
 in another.
 
 \subsection{Adoption Path for Production Systems}
@@ -1649,21 +1461,26 @@ Section~\ref{sec:auth0_validation}.
 \subsection{Practical Adoption Checklist}
 
 The following four steps cover the minimum integration surface for an engineering
-team adopting the NAC pattern in an existing MCP deployment. First,
-\textbf{verify IdP support}: confirm your identity provider supports the RFC 8693
-\texttt{urn:ietf:params:oauth:grant-type:token-exchange} grant type (Keycloak
-$\geq$17, Microsoft Entra OBO, Auth0 Token Vault, ZITADEL, and Authlete all
-qualify); if not, deploy a lightweight exchange sidecar as described in
-Section~\ref{sec:auth0_validation}. Second, \textbf{register per-service
-audiences}: each worker service must have a registered OAuth resource identifier,
-which is the only configuration change required at the identity provider. Third,
-\textbf{update the hub}: replace the single forwarded token with one
-\texttt{POST /token/exchange} call per worker, fired concurrently using
-\texttt{asyncio.gather} or an equivalent parallel construct---the total code
-change is fewer than 50 lines. Fourth, \textbf{enable worker validation}: each
-worker must verify the \texttt{aud}, \texttt{scope}, \texttt{act} chain depth,
-and \texttt{jti} (revoke after first use) via a shared middleware layer to
-avoid per-service duplication.
+team adopting the NAC pattern in an existing MCP deployment:
+
+\begin{enumerate}
+  \item \textbf{Verify IdP support}: Confirm your identity provider supports the
+      RFC~8693
+      \texttt{urn:ietf:\allowbreak params:\allowbreak oauth:\allowbreak
+      grant-type:\allowbreak token-exchange}
+      grant (Keycloak~$\geq$17, Microsoft Entra OBO, Auth0 Token Vault,
+      ZITADEL, Authlete all qualify). If not, deploy a lightweight exchange
+      sidecar.
+  \item \textbf{Register per-service audiences}: Each worker service must have a
+        registered OAuth resource identifier. This is the only configuration change
+        required at the identity provider.
+  \item \textbf{Update the hub}: Replace the single forwarded token with one
+        \texttt{POST /token/exchange} call per worker, fired concurrently using
+        \texttt{asyncio.gather} or equivalent. Total code change: $<50$ lines.
+  \item \textbf{Enable worker validation}: Each worker must verify \texttt{aud},
+        \texttt{scope}, \texttt{act} chain depth, and \texttt{jti} (revoke after
+        first use). Use a shared middleware; do not duplicate per-service.
+\end{enumerate}
 
 \subsection{Threat Model Boundaries}
 
@@ -1692,7 +1509,7 @@ identity at connection time; NAC handles delegation authority per request. CoSAI
 
 Hardy \cite{hardy1988} introduced the confused deputy problem, arguing that
 ambient authority is the root cause. Miller et al. \cite{miller2003} argued that
-capabilities---unforgeable, explicitly passed tokens of authority---are the
+capabilities unforgeable, explicitly passed tokens of authority are the
 correct solution. RFC 8693 child tokens are capabilities in this sense: issued
 fresh per call, bound to a specific service, and unforgeable.
 
@@ -1735,18 +1552,10 @@ Absolute values are environment-dependent; relative overhead is the meaningful
 comparison.
 
 \textbf{Stub services}: Worker business logic returns deterministic stub data.
-The security properties under evaluation---audience binding, scope attenuation,
-and delegation chain visibility---are enforced at the token validation layer and
-are independent of worker business logic. Stub services isolate the security
-measurement from external API latency variability, which strengthens rather than
-weakens the attack outcome results.
+Real downstream APIs add their own latency, reducing relative NAC overhead.
 
-\textbf{Simulated authorization flow}: The custom demo server simulates user
-consent without a browser-based PKCE exchange. Redirect URI validation is
-enforced in the secure stack (mismatched URIs are rejected). Full end-to-end
-compatibility with a production PKCE flow is confirmed by the Auth0 validation
-(Section~\ref{sec:auth0_validation}), which uses a live Auth0 tenant that
-enforces PKCE for all M2M token issuance.
+\textbf{Simulated authorization flow}: OAuth consent is simulated; production
+requires PKCE \cite{rfc7636} and a registered redirect URI.
 
 \textbf{Single revocation store instance}: Production deployments should use a
 highly available configuration (replicated cluster with sentinel failover).
@@ -1755,28 +1564,23 @@ highly available configuration (replicated cluster with sentinel failover).
 (RFC 6749 §6); child tokens must be reissued accordingly.
 
 \textbf{Future directions}:
-Several directions remain open for future work.
-\textit{Prompt injection interaction}: it is not yet established whether prompt
-injection that drives an agent to call a tool can also gain access to the
-resulting child tokens; the one-time-use \texttt{jti} semantics should limit
-damage, but a formal analysis remains open.
-\textit{Concurrent agent stress test}: a stress test harness
-(\texttt{run\_concurrent\_stress.py}) is included in the supplementary
-repository and has been executed. Five simultaneous agents shared one root
-token across 30 rounds each (600~total exchange operations); all 600
-succeeded with zero false positives, confirming that the Redis JTI store
-handles concurrent registrations and revocations correctly under multi-agent
-load (throughput: 143~exchanges/s on the evaluation machine).
-\textit{Additional IdP portability}: Auth0 M2M validation is complete
-(Section~\ref{sec:auth0_validation}); confirming portability against Keycloak 17
-and Microsoft Entra OBO remains open.
-\textit{Formal verification}: modelling the exchange protocol in ProVerif
-\cite{blanchet2001} or Tamarin \cite{meier2013} under the Dolev-Yao adversary
-model would provide a stronger security guarantee than empirical evaluation alone.
-\textit{Persistent-session token caching}: evaluating whether caching recently
-issued child tokens for a short TTL (e.g., 5\,s) can reduce per-request exchange
-overhead in high-frequency agentic loops is a promising direction for reducing
-the absolute overhead figure.
+\begin{enumerate}
+  \item \textit{Prompt injection interaction}: Does prompt injection driving an
+        agent to call a tool gain access to child tokens? The one-time-use
+        \texttt{jti} semantics should limit damage; formal analysis remains open.
+  \item \textit{Concurrent agent stress test}: Multiple simultaneous agents
+        sharing a root token; verify the revocation store handles concurrent
+        registrations without false positives.
+  \item \textit{Additional IdP portability}: Auth0 M2M validation is complete
+        (Section~\ref{sec:auth0_validation}); confirming portability against
+        Keycloak 17 and Microsoft Entra OBO remains open.
+  \item \textit{Formal verification}: Model the exchange protocol in ProVerif
+        \cite{blanchet2001} or Tamarin \cite{meier2013} under the Dolev-Yao
+        model.
+  \item \textit{Persistent-session token caching}: Evaluate whether caching
+        recently issued child tokens for a short TTL (e.g., 5\,s) can reduce
+        per-request exchange overhead in high-frequency agentic loops.
+\end{enumerate}
 
 
 \FloatBarrier  %% Flush remaining floats before Conclusion
@@ -1787,24 +1591,33 @@ the absolute overhead figure.
 %% ============================================================
 
 This paper presents the first formal analysis and empirical evaluation of the
-RFC~8693 NAC pattern for MCP multi-agent agentic workflows. Token
-passthrough---the current default in MCP implementations---simultaneously
-violates three independent security properties: audience binding (P1), scope
-attenuation (P2), and delegation chain visibility (P3). RFC 8693 NAC restores
-all three by construction, as each delegation hop issues a fresh token with a
-service-specific audience, an attenuated scope, a verifiable actor chain, and a
-one-time-use identifier. A 720-trial ablation study confirms that each property
-is independently necessary: no single property, and no two-property combination,
-blocks all four attack vectors. Per-hop cryptographic overhead is measured at
-$\approx 2.15$\,ms (one RSA-2048 sign plus one revocation store update),
-yielding $O(k)$ total cost for $k$-hop chains ($R^2 = 0.9999$ over
-$k=1\ldots10$); end-to-end measured overhead is $+35.6\%$ on a single machine,
-with production deployment overhead projected at $+7$--$15\%$ relative to the
-insecure baseline with a dedicated authorization server. Finally, the RFC 8693
-sidecar integration path was validated end-to-end against a live Auth0 tenant
-($N=30$), with all four attacks blocked in 100\% of trials using real Auth0 M2M
-root tokens, confirming that the pattern is authorization-server-agnostic by
-construction and requires no changes to the worker services.
+RFC~8693 NAC pattern for MCP multi-agent agentic workflows. Three conclusions
+follow from the analysis:
+
+\begin{enumerate}
+  \item Token passthrough the current default in MCP implementations 
+        simultaneously violates three independent security properties: audience
+        binding (P1), scope attenuation (P2), and delegation chain visibility
+        (P3).
+  \item RFC 8693 NAC restores all three properties by construction: each
+        delegation hop issues a fresh token with a service-specific audience,
+        an attenuated scope, a verifiable actor chain, and a one-time-use
+        identifier.
+  \item An ablation study of 720 trials confirms that each property is
+        independently necessary no single property and no two-property
+        combination blocks all four attack vectors.
+  \item Per-hop cryptographic overhead is measured at $\approx 2.15$\,ms
+        (one RSA-2048 sign plus one revocation store update), yielding $O(k)$
+        total cost for $k$-hop chains ($R^2 = 0.9999$ over $k=1\ldots10$).
+        End-to-end measured overhead is $+35.6\%$ on a single machine;
+        production deployment overhead is projected at $+7$--$15\%$ relative
+        to the insecure baseline with a dedicated authorization server.
+  \item The RFC 8693 sidecar integration path was validated end-to-end against
+        a live Auth0 tenant ($N=30$). All four attacks were blocked in 100\% of
+        trials with real Auth0 M2M root tokens, confirming that the pattern is
+        authorization-server-agnostic by construction and requires no changes
+        to the worker services.
+\end{enumerate}
 
 The pattern is authorization-server-agnostic, language-agnostic, and
 implementable with standard OAuth 2.1 infrastructure available in all major
@@ -1816,19 +1629,16 @@ architectural pattern to satisfy it.
 \FloatBarrier  %% Force all pending floats before this point
 
 \section*{Acknowledgments}
-This work was conducted independently, without institutional or industry
-affiliation. All evaluation code, server implementations, raw results, and
-reproduction instructions are openly available on GitHub \cite{nac_mcp_impl}.
-A citable, versioned archive of the code is deposited on Zenodo
-\cite{nac_mcp_impl} for long-term reproducibility.
+The authors thank [name(s)] for [contribution]. All evaluation code, server
+implementations, and raw results are available at [repository URL].
 
 %% ── Mandatory disclosure statements ──────────────────────────────────────────
 \section*{Author Contributions}
-\textbf{Conceptualisation}: N.~Patel; \textbf{Methodology}: N.~Patel;
-\textbf{Software}: N.~Patel; \textbf{Formal analysis}: N.~Patel;
-\textbf{Writing---original draft}: N.~Patel;
-\textbf{Writing---review \& editing}: N.~Patel;
-\textbf{Visualisation}: N.~Patel.
+\textbf{Conceptualisation}: [Author]; \textbf{Methodology}: [Author];
+\textbf{Software}: [Author]; \textbf{Formal analysis}: [Author];
+\textbf{Writing original draft}: [Author];
+\textbf{Writing review \& editing}: [Author];
+\textbf{Visualisation}: [Author].
 (CRediT taxonomy: \url{https://credit.niso.org})
 
 \section*{Conflict of Interest Statement}
@@ -1837,11 +1647,10 @@ commercial or financial relationships that could be construed as a potential
 conflict of interest.
 
 \section*{Data Availability Statement}
-All code, evaluation scripts, server implementations, and raw result files
-(\texttt{eval\_results.json}, \texttt{ablation\_results.json},
-\texttt{stress\_results.json}) are publicly available in the GitHub repository
-cited as \cite{nac_mcp_impl}. A permanent, versioned archive is deposited on
-Zenodo to ensure long-term availability independent of the GitHub repository.
+The datasets generated and analysed during this study are available from the
+corresponding author upon reasonable request. Evaluation scripts, server
+implementations, and raw results are available at the repository linked in the
+Acknowledgments.
 
 \section*{Ethics Statement}
 This study did not involve human participants, animal subjects, personal data,
@@ -1855,13 +1664,6 @@ funding agency in the public, commercial, or not-for-profit sectors.]
 
 %% ============================================================
 \begin{thebibliography}{99}
-
-\bibitem{nac_mcp_impl}
-N.~Patel,
-``RFC 8693 NAC for MCP: Reference Implementation and Evaluation Code,''
-GitHub repository, 2025.
-[Online]. Available: \url{[GitHub repository URL]}.
-Archived: \url{[Zenodo DOI URL]}
 
 \bibitem{mcp_spec}
 Anthropic, ``Model Context Protocol Specification,'' Nov.\ 2024.
