@@ -255,9 +255,8 @@ def _sim_a3_token_replay(cfg: AblationConfig, n: int) -> AblationOutcome:
                 enforce_chain     = cfg.enforce_chain,
                 enforce_jti       = cfg.enforce_jti,
             )
-            # First call succeeded — now revoke the jti (simulating worker post-use revocation)
-            if cfg.enforce_jti:
-                revoke_jti(jti)
+            # When enforce_jti=True, validate_token() atomically consumed the JTI
+            # via consume_jti() inside the call above.  No separate revoke needed.
         except Exception:
             # First call blocked is unexpected — skip this trial
             continue

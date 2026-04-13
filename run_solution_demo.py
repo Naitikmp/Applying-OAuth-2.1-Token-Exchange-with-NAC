@@ -228,7 +228,7 @@ async def main():
     print("    ✓ Audience binding   — each token valid only on its target service")
     print("    ✓ Scope attenuation  — child scope ⊆ parent scope enforced cryptographically")
     print("    ✓ Chain visibility   — every audit entry carries full delegation history")
-    print("    ✓ Replay prevention  — jti revoked after first use")
+    print("    ✓ Replay prevention  — jti atomically consumed on first use")
     print("    ✓ N-hop support      — 3-hop chain demonstrated with full chain validation")
     print()
     print("  Reference: https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices")

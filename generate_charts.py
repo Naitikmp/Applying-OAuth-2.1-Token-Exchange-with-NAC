@@ -411,7 +411,7 @@ def fig4_summary(data: dict, out: pathlib.Path) -> None:
         "✓  0% attribution → 100% attribution (A4)",
         "✓  Audience binding: aud checked per worker",
         "✓  Scope attenuation: child ⊆ parent enforced",
-        "✓  jti revoked after first use (one-time token)",
+        "✓  jti atomically consumed on first use (single-use token)",
         "✓  N-hop chain (demonstrated at 3 hops)",
         "",
         "Performance (measured on single machine)",

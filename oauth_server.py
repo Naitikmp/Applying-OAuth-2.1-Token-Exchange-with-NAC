@@ -170,8 +170,8 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
         #   make_child_token() decodes + validates + signs the new token.
         #
         # Step B — Redis JTI ops (~0.1 ms each):
-        #   register(child_jti): mark new token as active.
-        #   revoke(parent_jti):  mark parent as spent (one-time-use).
+        #   register(child_jti): mark new child token as active (single-use).
+        #   revoke(parent_jti):  defense-in-depth marker (see note below).
         #   Both calls are fast enough to run inline without threading.
 
         new_scope = scope_to_list(scope)
@@ -192,6 +192,13 @@ def make_oauth_app(*, secure: bool, callback_url: str) -> FastAPI:
             raise HTTPException(status_code=500, detail={"error": "server_error", "detail": str(exc)})
 
         # Step B: Redis JTI ops (inline — ~0.1 ms each)
+        #   register(child_jti): mark new child token as active for single-use.
+        #   revoke(parent_jti):  defense-in-depth — marks parent as exchanged to
+        #     prevent late re-exchange after the fan-out batch completes.  This
+        #     call is idempotent: under concurrent fan-out (asyncio.gather), all
+        #     k exchanges proceed because the auth server does not gate on parent
+        #     JTI status.  Parent tokens are multi-use for exchange; child tokens
+        #     are single-use at workers (P4).
         parent_claims = pyjwt.decode(subject_token, options={"verify_signature": False})
         parent_jti    = parent_claims.get("jti", "")
 

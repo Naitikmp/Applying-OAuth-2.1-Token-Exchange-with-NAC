@@ -58,7 +58,7 @@ from auth0_config import (
 )
 from auth0_exchange_server import make_auth0_exchange_app
 from nac_common import (
-    validate_token, revoke_jti, is_jti_revoked, clear_jti_store,
+    validate_token, revoke_jti, consume_jti, is_jti_revoked, clear_jti_store,
     AUDIENCES, TRUSTED_ACTORS,
 )
 import jwt as pyjwt
@@ -217,11 +217,11 @@ async def test_a2_audience_mismatch(calendar_token: str) -> bool:
 
 
 async def test_a3_token_replay(calendar_token: str) -> bool:
-    """A3: Revoke JTI (simulate first use), then try to validate again → must be BLOCKED."""
+    """A3: Consume JTI (simulate first use), then try to validate again → must be BLOCKED."""
     claims = pyjwt.decode(calendar_token, options={"verify_signature": False})
     jti    = claims.get("jti", "")
     if jti:
-        revoke_jti(jti)   # simulate worker first-use revocation
+        consume_jti(jti)  # simulate worker first-use atomic consumption
     try:
         validate_token(
             token             = calendar_token,

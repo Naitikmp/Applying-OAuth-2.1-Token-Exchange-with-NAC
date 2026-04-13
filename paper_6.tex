@@ -1,9 +1,10 @@
 %% ============================================================
 %% Applying OAuth 2.1 Token Exchange with Nested Actor Claims
-%% Approximate word count (excluding abstract, references, captions): ~8500
 %% to MCP Agentic Workflows
-%% v6 — Auth0 real-IdP validation: new subsection + Table VI, abstract updated,
-%%       Future Work item 3 completed and removed, Conclusion bullet 5 added
+%% Approximate word count (excl. abstract, references, captions): ~8500
+%% v8 — Review fixes: figure* placement, table citations, theorem labels,
+%%       removed mcp_wiki/vaswani2017/google_a2a, removed non-IEEE sections,
+%%       fixed Auth0/PKCE claim, comms dual-audience note, language quality
 %%
 %% Compile: pdflatex (run twice for cross-references)
 %% Packages: IEEEtran (journal), tikz, pgfplots,
@@ -13,6 +14,7 @@
 \documentclass[journal]{IEEEtran}
 \IEEEoverridecommandlockouts
 
+\usepackage[T1]{fontenc}
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{graphicx}
@@ -22,6 +24,7 @@
 \usepackage{url}
 \usepackage{hyperref}
 \usepackage{listings}
+\usepackage{upquote}    %% straight quotes in listings (not curly)
 \usepackage{multirow}
 \usepackage{array}
 \usepackage{tikz}
@@ -30,6 +33,12 @@
 \usepackage{tabularx}
 \usepackage{balance}
 \usepackage{placeins}   %% \FloatBarrier — prevents floats crossing section boundaries
+%% amsthm provides \begin{proof} and \theoremstyle; compatible with IEEEtran
+\usepackage{amsthm}
+\newtheorem{theorem}{Design Property}          %% "Design Property 1", etc.
+\newtheorem{proposition}{Proposition}           %% separate counter
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}             %% upright body text
 
 \usetikzlibrary{
   arrows.meta, shapes, positioning, fit,
@@ -51,14 +60,18 @@
 
 %% ── code listing style ──────────────────────────────────────
 \lstset{
-  basicstyle=\scriptsize\ttfamily,
+  basicstyle=\fontsize{7}{8.4}\selectfont\ttfamily,
   breaklines=true,
+  breakatwhitespace=true,
   frame=single,
   captionpos=b,
-  xleftmargin=1.2em,
+  xleftmargin=0.8em,
   numbers=left,
   numberstyle=\tiny\color{gray},
   numbersep=4pt,
+  columns=flexible,
+  keepspaces=true,
+  showstringspaces=false,
 }
 
 %% ── global TikZ styles ──────────────────────────────────────
@@ -107,9 +120,8 @@
 %% ============================================================
 \begin{document}
 
-\title{Applying OAuth 2.1 Token Exchange with Nested Actor Claims\\
-to MCP Agentic Workflows:\\
-An Architectural Pattern for Secure Delegation}
+\title{Secure Delegation for MCP Agentic Workflows\\
+via OAuth Token Exchange and Nested Actor Claims}
 
 \author{\IEEEauthorblockN{Naitik Patel}
 \IEEEauthorblockA{Independent Researcher\\
@@ -124,19 +136,21 @@ connecting large language model agents to downstream tool services. A pervasive
 security anti-pattern---\textit{token passthrough}---causes orchestrating hubs
 to forward the user's OAuth access token unchanged to every downstream service,
 simultaneously violating audience binding, scope attenuation, and delegation
-chain visibility, constituting the \textit{Confused Deputy Problem}. We propose
+chain visibility, creating \textit{confused deputy risk}. We propose
 an architectural pattern based on RFC~8693 (OAuth~2.0 Token Exchange) with
 Nested Actor Claims (NAC), in which each delegation hop issues a fresh,
 narrowly scoped child token valid only for the target service. We construct a
 reference implementation and evaluate it against four concrete attack vectors
 using an ablation study across multiple enforcement configurations, validated
 against a live identity provider. The evaluation confirms that the pattern
-eliminates all identified attack vectors, that each of the three security
-properties is independently necessary, and that per-hop overhead scales
+eliminates all identified attack vectors under a controlled baseline, that
+audience binding, scope attenuation, and single-use JTI enforcement each
+address an orthogonal attack surface, and that per-hop overhead scales
 linearly with chain depth, adding only modest overhead that is projected to
 remain in the single-digit to low-double-digit percentage range in typical
-production deployments. The pattern is authorization-server-agnostic and
-requires no changes to the agent layer.
+production deployments. Preliminary validation against a live Auth0 tenant shows that the exchange
+mechanism can be integrated with an external identity provider. The pattern
+requires no changes to the agent layer or MCP message format.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -144,21 +158,6 @@ Model Context Protocol, OAuth 2.1, RFC 8693, Token Exchange, Nested Actor Claims
 Confused Deputy, Multi-Agent AI, Delegation Chain, Agentic Security, OWASP GenAI
 \end{IEEEkeywords}
 
-%% Plain Language Summary (for broad audience accessibility)
-\vspace{4pt}
-\noindent\textit{\textbf{Plain Language Summary:}}
-\textit{AI assistants increasingly call multiple services on a user's behalf,
-carrying a security credential called an OAuth token. A common
-shortcut---passing the same token to every service unchanged---is insecure: it
-gives each service far more access than it needs, enables attackers to misuse the
-token across service boundaries, and leaves no audit trail showing which AI agent
-made each call. We describe and evaluate a standards-based fix: before calling
-each service, the AI hub asks a trusted authorization server for a fresh,
-narrowly scoped token valid only for that service. Our evaluation shows this
-blocks all four known attacks with no false positives, adds approximately 2\,ms
-per service call in raw cryptographic cost ($\approx$35\% single-machine overhead;
-projected $+7$--$15\%$ in production with a dedicated authorization server),
-and leaves a complete, verifiable record of every delegation step.}
 
 %% ============================================================
 \section{Introduction}
@@ -172,7 +171,7 @@ post an update to the team channel.'' Behind this single natural-language reques
 lies a coordinated sequence of calls to four distinct downstream services, each
 with its own authorization requirements.
 
-The Model Context Protocol (MCP) \cite{mcp_spec,mcp_wiki}, introduced by Anthropic in
+The Model Context Protocol (MCP) \cite{mcp_spec}, introduced by Anthropic in
 November 2024 and subsequently adopted across the industry, provides the emerging
 standard interface for this hub-and-spoke architecture: an \textit{assistant hub}
 receives tool calls from an agent and in turn calls \textit{worker services} as
@@ -190,66 +189,43 @@ security \cite{cosai_mcp} states: ``don't pass through OAuth tokens directly.
 Use token exchange (RFC 8693) to maintain full accountability and prevent confused
 deputy attacks.''
 
-Despite this consensus recommendation, no prior work has (1)~formally
-characterised the three security properties that token passthrough
-violates \textit{audience binding}, \textit{scope attenuation}, and
-\textit{delegation chain visibility} (2)~described an architectural pattern for
-remediation that is implementation-agnostic, (3)~provided an ablation study
-demonstrating the independent necessity of each property, or (4)~empirically
-quantified the overhead of the remediated pattern. This paper addresses all four
-gaps.
+While the security community has identified token passthrough as an anti-pattern
+and recommended RFC 8693, existing guidance does not (1)~decompose the specific
+security properties violated---\textit{audience binding}, \textit{scope
+attenuation}, and \textit{delegation chain visibility}---or (2)~describe a
+concrete architectural pattern for MCP hub-to-worker remediation, or
+(3)~provide ablation evidence for each property's contribution, or
+(4)~quantify the overhead. This paper addresses these four gaps.
 
 \textbf{Contributions:}
 \begin{enumerate}
-  \item \textbf{Formal problem characterisation.} We define three independent
+  \item \textbf{Problem characterisation.} We identify three independent
         security properties (P1 audience binding, P2 scope attenuation, P3
-        delegation chain visibility) and prove that token passthrough violates
-        all three simultaneously (Section~\ref{sec:problem}).
-  \item \textbf{Formal solution with proofs.} We propose the RFC~8693 NAC
-        architectural pattern and prove, by construction, that it satisfies
-        P1--P3 and prevents token replay (Theorems~1--4,
+        delegation chain visibility) and show that token passthrough simultaneously
+        violates all three (Section~\ref{sec:problem}).
+  \item \textbf{Architectural solution.} We propose the RFC~8693 NAC
+        pattern and establish, by construction, that it satisfies
+        P1--P3 and prevents token replay under the JTI store's
+        atomicity guarantees
+        (Design Properties~\ref{thm:p1}--\ref{thm:replay},
         Section~\ref{sec:solution}).
-  \item \textbf{Theoretical overhead bound.} We prove that per-hop overhead is
-        $O(k)$ sequentially and $O(1)$ in wall-clock time under concurrent
-        issuance, with an irreducible constant of one RSA signing operation
-        plus one revocation store write (Proposition~1,
-        Section~\ref{sec:solution}).
+  \item \textbf{Overhead analysis.} We show that per-hop overhead is
+        $O(k)$ sequentially and near-constant in $k$ under concurrent
+        issuance with sufficient authorization-server parallelism, with an
+        irreducible constant of one RSA signing operation plus one JTI
+        store write (Proposition~1, Section~\ref{sec:solution}).
   \item \textbf{Empirical validation.} A reference implementation and 720-trial
-        ablation study confirm all four theorems and the overhead bound, with
-        zero false positives and $R^2 = 0.9999$ linearity (Section~\ref{sec:eval}).
+        ablation study empirically confirm P1, P2, and P4 through independent
+        toggling and P3 through attribution testing, with zero false positives
+        and $R^2 = 0.9999$ linearity over $k = 1\ldots10$ hops
+        (Section~\ref{sec:eval}).
 \end{enumerate}
 
 %% ============================================================
 \section{Background and Definitions}
 \label{sec:background}
-%% ============================================================
-
-This section establishes the technical context for the paper.
-
-\subsection{LLM Agents and the ReAct Model}
-
-Modern LLMs exhibit emergent tool-use capabilities. In the \textit{ReAct}
-paradigm \cite{yao2022react}, the model interleaves reasoning with action
-calls: it selects a tool, calls it, observes the result, and re-plans. This
-is the computational model underlying MCP tool use \cite{wang2024survey}.
-
-\subsection{The Model Context Protocol}
-
-MCP \cite{mcp_spec} defines a client-server protocol over JSON-RPC 2.0. An
-\textit{MCP server} exposes \textit{tools} (callable functions), \textit{resources}
-(data), and \textit{prompts} (templates) to an \textit{MCP client}. Authentication
-is carried via the \texttt{Authorization: Bearer} HTTP header.
-
-The MCP authorization specification \cite{mcp_spec_2025} treats MCP servers as
-OAuth 2.1 resource servers. Figure~\ref{fig:mcp_std_auth} shows the standard
-authorization flow: the MCP client discovers the authorization server via
-Protected Resource Metadata (PRM), performs an OAuth 2.1 authorization code flow
-with PKCE, obtains an access token, and uses it to call the MCP server. This flow
-governs the \textit{client-to-hub} boundary only. It does not specify how the hub
-should authorize its own calls to downstream worker services---the gap this paper
-fills.
-
-\begin{figure*}[!ht]
+%% ── Figure 1 placed at section top per IEEEtran figure* float rules ──────────
+\begin{figure*}[!t]
 \centering
 \begin{tikzpicture}[
   every node/.style={font=\scriptsize},
@@ -351,6 +327,31 @@ addresses.}
 \label{fig:mcp_std_auth}
 \end{figure*}
 
+%% ============================================================
+
+\subsection{LLM Agents and the ReAct Model}
+
+Modern LLMs exhibit emergent tool-use capabilities. In the \textit{ReAct}
+paradigm \cite{yao2022react}, the model interleaves reasoning with action
+calls: it selects a tool, calls it, observes the result, and re-plans. This
+is the computational model underlying MCP tool use \cite{wang2024survey}.
+
+\subsection{The Model Context Protocol}
+
+MCP \cite{mcp_spec} defines a client-server protocol over JSON-RPC 2.0. An
+\textit{MCP server} exposes \textit{tools} (callable functions), \textit{resources}
+(data), and \textit{prompts} (templates) to an \textit{MCP client}. Authentication
+is carried via the \texttt{Authorization: Bearer} HTTP header.
+
+The MCP authorization specification \cite{mcp_spec_2025} treats MCP servers as
+OAuth 2.1 resource servers. Figure~\ref{fig:mcp_std_auth} shows the standard
+authorization flow: the MCP client discovers the authorization server via
+Protected Resource Metadata (PRM), performs an OAuth 2.1 authorization code flow
+with PKCE, obtains an access token, and uses it to call the MCP server. This flow
+governs the \textit{client-to-hub} boundary only. It does not specify how the hub
+should authorize its own calls to downstream worker services---the gap this paper
+fills.
+
 In multi-service deployments, the AI assistant hub acts as both an MCP server
 (receiving tool calls from the agent) and an HTTP client (calling downstream
 worker services). This dual role is the hub-and-spoke topology that the MCP
@@ -371,7 +372,7 @@ The \textbf{\texttt{aud}} claim identifies the intended recipient; a receiver
 MUST reject tokens not addressed to it \cite{rfc9068}.
 The \textbf{\texttt{scope}} claim carries the set of permissions the token grants.
 The \textbf{\texttt{jti}} claim provides a unique per-token identifier that
-enables revocation and replay prevention.
+enables single-use enforcement and replay prevention.
 Finally, the \textbf{\texttt{act}} claim (defined by RFC 8693) records the
 identity of the party exercising delegated authority, forming a verifiable
 delegation chain.
@@ -384,22 +385,24 @@ We use the \textit{delegation} semantics: the acting party remains
 distinguishable from the subject; the new token preserves \texttt{sub} = $u$
 while recording the hub in a nested \texttt{act} claim. RFC 8693 also defines
 the \textit{scope non-escalation invariant}: a derived token's scope must not
-exceed the subject token's scope---the formal basis for P2. The specification
-is deployed in production by Microsoft, Auth0, ZITADEL, Authlete, Keycloak,
-and Salesforce \cite{rfc8693_deploy}.
+exceed the subject token's scope---the formal basis for P2. Token exchange endpoints compatible with the specification are available in
+Microsoft Entra (OBO), Auth0, ZITADEL, Authlete, Keycloak, and Salesforce
+\cite{rfc8693_deploy}.
 
-\subsection{Token Revocation Stores}
+\subsection{JTI State Stores}
 
-RFC 7009 \cite{rfc7009} defines OAuth 2.0 token revocation. For per-request
-one-time-use semantics where a token's \texttt{jti} must be revoked after a
-single use---the revocation check must be cross-process and low-latency. The
-canonical architecture is an in-memory key-value store with TTL-based expiry:
-the record is written after issuance (\textit{register}), queried before each
-use (\textit{check}), and overwritten after consumption (\textit{revoke}). Any
-implementation satisfying this interface---whether managed (e.g., AWS
-ElastiCache, Google Memorystore) or self-hosted (e.g., Redis, DragonflyDB)---
-satisfies the requirement. The specific technology choice affects operational
-latency and availability, not security semantics.
+RFC 7009 \cite{rfc7009} motivates OAuth 2.0 token revocation semantics. Our
+reference implementation uses a separate JTI state store to enforce atomic
+single-use consumption, extending the revocation concept to per-request
+granularity. The canonical architecture is an in-memory key-value store
+with TTL-based expiry: the identifier is written on issuance
+(\textit{register}) and \textit{atomically consumed} on first presentation---a
+single store operation that checks the identifier's status and marks it as
+spent, preventing concurrent replay.  Any implementation supporting atomic
+check-and-set with TTL-based expiry---whether managed (e.g., AWS ElastiCache,
+Google Memorystore) or self-hosted (e.g., Redis with Lua scripts,
+DragonflyDB)---satisfies the requirement. The specific technology choice
+affects operational latency and availability, not security semantics.
 
 \subsection{OWASP Generative AI Top 10 (2025)}
 
@@ -479,7 +482,7 @@ Figure~\ref{fig:passthrough} visualises this topology.
   {\textbf{A1}: all scopes\\visible at $W_2$};
 \node[font=\scriptsize, color=C_WARN, text width=2.6cm, align=left]
   at (9.4, 0.5)
-  {\textbf{A3}: jti never\\revoked};
+  {\textbf{A3}: jti reusable\\across requests};
 
 %% A4 annotation under hub
 \node[font=\scriptsize, color=C_WARN, align=center]
@@ -548,6 +551,8 @@ risks.''
 
 \subsection{Four Concrete Attack Vectors}
 
+Table~\ref{tab:attack_formal} formally defines the four attack vectors that arise from P1--P3 violations.
+
 \begin{table}[h]
 \caption{Formal attack vector definitions. Each attack exploits the absence of
 one or more security properties (P1~=~audience binding, P2~=~scope attenuation,
@@ -566,7 +571,7 @@ A1 & Agent calls a privileged tool using a token without the required scope
 A2 & Token obtained for service $W_i$ is replayed at $W_j\;(i\neq j)$
      & $\neg$\,P1 \\
 A3 & Captured child token is replayed for a second unauthorised call
-     & No revocation \\
+     & No single-use enforcement \\
 A4 & Audit log lacks delegation chain; calls cannot be attributed to agent
      & $\neg$\,P3 \\
 \bottomrule
@@ -583,7 +588,7 @@ A4 & Audit log lacks delegation chain; calls cannot be attributed to agent
 %% Placed at the very top of the section per IEEEtran float rules.
 %% Left panel: token passthrough (insecure baseline).
 %% Right panel: RFC 8693 NAC (secure pattern).
-\begin{figure*}[!ht]
+\begin{figure*}[!t]
 \centering
 \begin{tikzpicture}[
   every node/.style={font=\scriptsize},
@@ -722,7 +727,7 @@ A4 & Audit log lacks delegation chain; calls cannot be attributed to agent
 \node[draw=C_PAR!55, fill=C_PAR!10, rounded corners=2pt,
       font=\tiny, align=left, inner sep=3pt]
   at (\rxW,-6.55)
-  {validate: \texttt{aud}, scope, act,\\jti (revoke after use)};
+  {validate: \texttt{aud}, scope, act,\\jti (atomic consume)};
 
 %% Workers → Hub: tool result
 \draw[SD/bck] (\rxW,-7.3) -- (\rxH,-7.3);
@@ -747,16 +752,9 @@ blocking all four attacks by construction.}
 \subsection{Pattern Overview}
 
 Figure~\ref{fig:seq_comparison} contrasts the two flows at a glance.
-Intuitively, the NAC pattern replaces a single all-access key with a set of
-single-use, room-specific keys: instead of handing the same master key to every
-service, the hub asks a trusted authority to cut a new key for each service,
-valid only for that service, carrying only the permissions it needs, and expiring
-after one use. The authority records in the key itself a chain of custody showing
-which agent made the request on behalf of which user.
-
-More precisely: Before invoking worker $W_i$, the orchestrating hub presents its
-current token to the authorization server's token exchange endpoint and obtains a
-fresh, narrowly scoped child token:
+Before invoking worker $W_i$, the orchestrating hub presents its current token
+to the authorization server's token exchange endpoint and obtains a fresh,
+narrowly scoped child token:
 
 \begin{equation}
 T_i = \mathrm{Exchange}\!\left(
@@ -794,14 +792,14 @@ payload construction, which maps directly to Equation~(\ref{eq:child}).
   caption={Child token construction (\texttt{nac\_common.py}).
   Each field enforces one security property.}]
 payload = {
-  "sub":   parent["sub"],           # subject preserved
-  "aud":   new_audience,            # P1: per-worker audience
-  "scope": scope_to_str(new_scope), # P2: attenuated scope
-  "jti":   str(uuid.uuid4()),       # one-time-use ID
-  "act":   {"sub": actor,           # P3: delegation chain
-             "act": parent.get("act")},
+  "sub":   parent["sub"],        # preserved
+  "aud":   new_audience,         # P1
+  "scope": scope_str(new_scope), # P2
+  "jti":   str(uuid.uuid4()),   # P4
+  "act":   {"sub": actor,        # P3
+    "act": parent.get("act")},
 }
-child_token = jwt.encode(payload, signing_key, algorithm="RS256")
+token = jwt.encode(payload, key, "RS256")
 \end{lstlisting}
 
 %% ---- FIGURE 3: NAC Architecture (single column, fixed) ----
@@ -893,10 +891,11 @@ subject to authorization server capacity. This is the basis for the
 \begin{proposition}[\textbf{Overhead Bound}]
 \label{prop:overhead}
 For $k$ independent workers, sequential NAC overhead is $O(k)$ with a
-constant equal to one RSA signing operation plus one revocation store write
-per hop. Under concurrent issuance, wall-clock overhead collapses to $O(1)$
-relative to $k$, bounded by $t_{\mathrm{sign}} + t_{\mathrm{store}}$ --- the
-cost of a single exchange --- regardless of how many workers are invoked.
+constant equal to one RSA signing operation plus one JTI store write
+per hop. Under concurrent issuance with sufficient authorization-server parallelism,
+wall-clock overhead is near-constant in $k$, bounded by
+$t_{\mathrm{sign}} + t_{\mathrm{store}}$ --- the cost of a single
+exchange --- regardless of how many workers are invoked.
 \end{proposition}
 \begin{proof}
 Each child token exchange is a function solely of
@@ -921,13 +920,15 @@ $k \times t_{\mathrm{exchange}}$ to a single round-trip.
 
 \begin{lstlisting}[language=Python, label=lst:gather,
   caption={Concurrent RFC 8693 exchange (\texttt{assistant\_server.py});
-  all four tokens are issued in parallel, achieving $O(1)$ wall-clock overhead.}]
-cal, docs, email, slack = await asyncio.gather(
-    _get_worker_token(root, "calendar", ["calendar:read"]),
-    _get_worker_token(root, "docs",     ["docs:read"]),
-    _get_worker_token(root, "comms",    ["email:send"]),
-    _get_worker_token(root, "comms",    ["slack:write"]),
+  all four tokens are issued in parallel, achieving near-constant wall-clock
+  overhead in $k$ workers.}]
+tokens = await asyncio.gather(
+  _get_token(root, "calendar", ["calendar:read"]),
+  _get_token(root, "docs",     ["docs:read"]),
+  _get_token(root, "comms",    ["email:send"]),
+  _get_token(root, "comms",    ["slack:write"]),
 )
+cal, docs, email, slack = tokens
 \end{lstlisting}
 
 \subsection{N-Hop Delegation Chains}
@@ -956,14 +957,14 @@ $\mathcal{H}$, the authorization server, and a representative worker
 $W_i$---to show the general $k$-worker pattern. Phase~2 uses a ``par''
 combined fragment for the concurrent exchanges; Phase~3 uses a ``loop''
 fragment for the sequential worker invocations, each with its own
-validation and \texttt{jti} revocation step.
+atomic validate-and-consume gate (P1--P4 checked before business logic runs).
 
 %% ---- FIGURE 4: NAC Exchange Sequence Diagram (full width) ----
 %% Redesigned: 4 actors (Alice, Hub, Auth Server, Worker Wi) with
 %% proper spacing matching the reference MCP OAuth flow style.
 %% Uses par fragment for concurrent exchanges, loop fragment for
 %% worker calls, and activation boxes for worker validation steps.
-\begin{figure*}[!ht]
+\begin{figure*}[!t]
 \centering
 \begin{tikzpicture}[
   every node/.style={font=\scriptsize},
@@ -1063,32 +1064,26 @@ validation and \texttt{jti} revocation step.
   {4.\ Bearer $T_i$
    (\texttt{aud}=$W_i$,\ \texttt{scope}=$s_i$)};
 
-%% Worker validation box (activation on lifeline)
+%% Worker validate-and-consume gate (single atomic step, before any business logic)
 \node[SD/lbl, fill=C_PAR!15, draw=C_PAR!55, rounded corners=3pt,
       font=\tiny, align=left, minimum width=3.6cm, inner sep=4pt]
   at (\xWk,-11.3)
-  {{\bfseries Validate:}\\
+  {{\bfseries Validate \& consume (atomic):}\\
    \texttt{aud}($T_i$) $= W_i$ \quad(P1)\\
    \texttt{scope}($T_i$) $\subseteq s_i$ \quad(P2)\\
    \texttt{act}\ chain trusted \quad(P3)\\
-   jti$_i \notin$ revocation store};
+   consume\_jti($j_i$) \quad(P4)\\[-1pt]
+   {\scriptsize\textit{reject if not first use}}};
 
-%% 5 — tool result
-\draw[SD/bck] (\xWk,-12.3) -- (\xHu,-12.3);
-\node[SD/lbl, above] at ({(\xHu+\xWk)/2},-12.3)
-  {5.\ Tool result};
+%% consumption written to store (before tool execution)
+\draw[SD/bck, color=C_PAR!55, dashed] (\xWk,-12.6) -- (\xHu,-12.6);
+\node[SD/lbl, above] at ({(\xHu+\xWk)/2},-12.6)
+  {(jti$_i$ atomically consumed)};
 
-%% Worker post-use revocation box
-\node[SD/lbl, fill=C_WARN!12, draw=C_WARN!40, rounded corners=3pt,
-      font=\tiny, align=center, minimum width=3.2cm]
-  at (\xWk,-13.4)
-  {revoke jti$_i$ in store\\
-   (one-time-use enforced)};
-
-%% revocation written
-\draw[SD/bck, color=C_WARN!55, dashed] (\xWk,-14.3) -- (\xHu,-14.3);
-\node[SD/lbl, above] at ({(\xHu+\xWk)/2},-14.3)
-  {(jti$_i$ marked revoked)};
+%% 5 — tool execution and result (only after validation gate passes)
+\draw[SD/bck] (\xWk,-13.6) -- (\xHu,-13.6);
+\node[SD/lbl, above] at ({(\xHu+\xWk)/2},-13.6)
+  {5.\ Tool result (business logic runs only after gate passes)};
 
 %% 6 — Hub aggregates and responds to Alice
 \draw[SD/bck] (\xHu,-15.5) -- (\xAl,-15.5);
@@ -1112,16 +1107,25 @@ child tokens, each with a unique audience, attenuated scope, and a nested
 \texttt{act} claim recording $\mathcal{H}$ as the acting party.
 \textbf{Phase~3}: Each worker ($W_i$) receives only its own token,
 validates all four security properties (P1--P3 plus JTI freshness), and
-revokes the \texttt{jti} after first use, preventing replay.
+atomically consumes the \texttt{jti} on first presentation, preventing
+concurrent and sequential replay.
 Solid arrows are requests; dashed arrows are responses.
 $W_i$ represents each worker in sequence; the diagram generalises to
 $k$ workers.}
 \label{fig:nac_seq}
 \end{figure*}
 
-\subsection{Security Property Satisfaction}
+\subsection{Security Design Properties (by Construction)}
 
-\begin{theorem}[\textbf{P1 satisfied}]
+The following properties are design invariants enforced by the authorization
+server and verifiable from the token structure. They are established by
+construction---each property follows directly from how the authorization server
+builds and signs child tokens---and are not cryptographic reductions or
+game-based proofs. Mechanised formal verification (ProVerif / Tamarin) remains
+future work (Section~\ref{sec:limitations}).
+
+\begin{theorem}[Audience Binding, P1]
+\label{thm:p1}
 Worker $W_i$ receives only tokens with $\texttt{aud}=\mathrm{AUDIENCE}(W_i)$.
 Any replayed token from $W_j\;(j\neq i)$ fails the audience check.
 \end{theorem}
@@ -1132,7 +1136,8 @@ key and cannot produce or modify tokens. Any token with
 $\texttt{aud}\neq\mathrm{AUDIENCE}(W_i)$ fails JWT audience validation.
 \end{proof}
 
-\begin{theorem}[\textbf{P2 satisfied}]
+\begin{theorem}[Scope Attenuation, P2]
+\label{thm:p2}
 The authorization server enforces $s_i \subseteq \mathrm{scope}(T_{\mathrm{parent}})$
 at exchange time. Any request for scope $s^* \not\subseteq
 \mathrm{scope}(T_{\mathrm{parent}})$ is rejected before any child token is issued.
@@ -1145,7 +1150,8 @@ This follows directly from the RFC 8693 scope non-escalation invariant
 \cite{rfc8693}.
 \end{proof}
 
-\begin{theorem}[\textbf{P3 satisfied}]
+\begin{theorem}[Delegation Chain Visibility, P3]
+\label{thm:p3}
 The \texttt{act} claim in each child token is a cryptographically signed record
 of every delegation hop, enabling full attribution.
 \end{theorem}
@@ -1156,16 +1162,23 @@ Verifying parties walk the nested \texttt{act} chain and confirm each actor
 against a set of trusted identities.
 \end{proof}
 
-\begin{theorem}[\textbf{Token Replay Prevented}]
-Under the NAC pattern with per-request \texttt{jti} revocation, token $T_i$
-with identifier $j_i$ is rejected on any second presentation.
+\begin{theorem}[Atomic Single-Use Enforcement, P4]
+\label{thm:replay}
+Under the NAC pattern with per-request atomic JTI consumption, token $T_i$
+with identifier $j_i$ is rejected on any second presentation, including
+concurrent replay.
 \end{theorem}
 \begin{proof}
-After first successful validation, $W_i$ writes $j_i$ to the revocation store
-with status \textit{revoked} (cf.\ RFC~7009 token revocation semantics \cite{rfc7009}). On second presentation, the revocation check
-returns \textit{revoked} and $W_i$ returns an error before executing any
-business logic. The TTL of the revocation record must exceed the token's
-remaining lifetime to prevent races.
+At first presentation, a Redis Lua script atomically reads the key
+$\texttt{nac:jti:}j_i$ and, only if its value is \texttt{"active"}, overwrites
+it with \texttt{"consumed"} in a single server-side step.
+Lua scripts in Redis execute atomically---no other command can interleave---so
+exactly one concurrent request can observe the \texttt{"active"} value; all
+others return a non-\texttt{active} value and are rejected as replays.
+The consumed marker's TTL is preserved from the active marker, ensuring the
+record outlives the token's remaining lifetime (cf.\ RFC~7009 \cite{rfc7009}).
+A sequential replay after first use observes the \texttt{"consumed"} marker
+directly.
 \end{proof}
 
 \subsection{Architectural Requirements for Adopters}
@@ -1179,8 +1192,8 @@ the OBO flow) support this natively \cite{rfc8693_deploy}. The
 firing exchanges concurrently for independent workers
 (Equation~\ref{eq:concurrent}). Each \textbf{worker} must validate the
 \texttt{aud}, \texttt{scope}, \texttt{act} chain, and \texttt{jti} on every
-incoming request, and must write the \texttt{jti} to the revocation store after
-successful use. The \textbf{revocation store} must support sub-millisecond
+incoming request; the \texttt{jti} must be atomically consumed (checked and
+marked in a single store operation) to prevent concurrent replay. The \textbf{JTI store} must support sub-millisecond
 read/write of \texttt{jti} records shared across processes with TTL-based
 expiry. Finally, \textbf{key separation} must be enforced: only the
 authorization server holds the RSA private signing key; workers hold the
@@ -1197,62 +1210,104 @@ language with an HTTP client and JWT library.
 \label{sec:impl}
 %% ============================================================
 
-Theorems~1--4 and Proposition~\ref{prop:overhead} establish the security and
-overhead properties of the NAC pattern by construction. To provide empirical
-confirmation, we constructed a minimal reference implementation: two parallel
-server stacks sharing identical six-component topology, differing only in
-whether RFC 8693 exchange and token validation are enforced. The implementation
-is intentionally minimal---each component is a single Python file using FastAPI
-and standard libraries---so that every security-relevant decision is
-immediately auditable and the distance between theory and code is as small as
-possible.
+Design Properties~\ref{thm:p1}--\ref{thm:replay} and Proposition~\ref{prop:overhead}
+establish the security and overhead properties by construction. To provide
+empirical confirmation, we constructed a minimal reference implementation:
+two parallel server stacks with identical six-component topology, differing only
+in whether RFC 8693 exchange and token validation are enforced. Each component
+is a single Python file using FastAPI and standard libraries, keeping every
+security-relevant decision immediately auditable.
 
 \subsection{Component Architecture}
 
-\textbf{Authorization server}: Implements RFC 8693 \texttt{/token/exchange}.
-In the secure stack, it validates the subject token, enforces scope attenuation,
-issues a signed child token, and registers the new \texttt{jti}. In the baseline,
-the endpoint echoes the subject token unchanged.
+\textbf{Authorization server}: Implements the RFC~8693
+token exchange endpoint (\texttt{/token/exchange}).
+In the secure stack, it validates the subject token, enforces scope
+attenuation, issues a signed child token, and registers the new
+\texttt{jti}. In the baseline, the endpoint echoes the subject token
+unchanged.
 
-\textbf{Assistant hub}: Acts as both an MCP server (to the agent) and an HTTP
-client (to workers and the authorization server). In the secure stack, it fires
-concurrent RFC 8693 exchanges for all workers before any worker call using a
-shared HTTP connection pool to amortise TCP overhead across rounds.
+\textbf{Assistant hub}: Acts as both an MCP server (to the agent)
+and an HTTP client (to workers and the authorization server). In the
+secure stack, it fires concurrent RFC~8693 exchanges for all workers
+before any worker call, using a shared HTTP connection pool to
+amortise TCP overhead across rounds.
 
-\textbf{Worker services}: Four services (Calendar, Documents, Communications,
-External-API) each implementing token validation. In the secure stack, all four
-properties (P1--P3 plus replay prevention) are enforced and the \texttt{jti} is
-revoked after first use. In the baseline, validation is omitted.
+\textbf{Worker services}: Four services (Calendar, Documents,
+Communications, External-API) each implementing token validation
+middleware. In the secure stack, all four properties (P1--P4) are
+enforced; the \texttt{jti} is atomically consumed on first
+presentation via a Redis Lua script, preventing concurrent replay
+(Listing~\ref{lst:jti}). In the baseline, validation is omitted.
+Adopting the pattern requires adding this middleware to workers; tool
+implementations and the MCP message format are unchanged. Note: the
+Communications worker shares a single \texttt{comms} audience for
+email and Slack in this prototype; production deployments should
+assign distinct per-service audiences.
 
-\textbf{Revocation store}: We use Redis \cite{redis} as the revocation store
-in our reference implementation---a widely deployed in-memory key-value server
-that provides the sub-millisecond operation latency required for per-request
-validation. Key schema:
+\textbf{JTI store}: We use Redis~\cite{redis} as the JTI state
+store---a widely deployed in-memory key-value server that provides
+sub-millisecond latency for per-request validation. Key schema:
 
-\begin{equation}
-\texttt{nac:jti:}\langle\text{uuid}\rangle \to
-\begin{cases}
-  \texttt{"active"}  & \text{TTL} = \text{token lifetime} + 60\,\text{s} \\
-  \texttt{"revoked"} & \text{TTL} = 300\,\text{s}
-\end{cases}
-\end{equation}
+\smallskip
+\noindent
+{\scriptsize
+\begin{tabular}{@{}lll@{}}
+\texttt{active} & life$+$60\,s & issued \\
+\texttt{consumed:$\langle$ts$\rangle$} & preserved & child used (P4) \\
+\texttt{revoked} & 300\,s & parent exchanged \\
+\end{tabular}}
+\smallskip
+
+\textbf{Two-tier JTI lifecycle.}  Parent (root) tokens and child tokens follow
+different single-use rules.  A parent token is \textit{multi-use for exchange}:
+the hub may exchange one root token into $k$ child tokens concurrently
+(Equation~\ref{eq:concurrent}), and may reuse the same root token across
+multiple orchestration rounds (e.g., when the root token is cached from an
+external IdP).  The authorization server writes a \texttt{"revoked"} marker on
+the parent JTI after each exchange as a \textit{non-gating audit signal}; the
+exchange endpoint does not reject based on parent JTI status, so subsequent
+exchanges with the same parent remain valid.  A child token, by contrast, is
+\textit{single-use for worker requests}: the target worker atomically consumes
+its JTI on first presentation (Lua script, P4), rejecting any subsequent
+replay---including concurrent replay.  Only child-token consumption is a
+security gate; parent-token marking is observability infrastructure.
 
 Listing~\ref{lst:jti} shows the three JTI operations that implement this
 schema. Each operation completes in $\approx 0.1$\,ms (co-located Redis,
 binary protocol), contributing only $\approx 2\%$ of total overhead.
 
 \begin{lstlisting}[language=Python, label=lst:jti,
-  caption={Redis JTI store: register on issue, revoke on exchange,
-  check on each worker request (\texttt{nac\_common.py}, $\approx$0.1\,ms/op).}]
-def register_jti(jti, exp):          # called by auth server on issue
-    ttl = max(1, int(exp - time.time()) + 60)
-    redis.set(f"nac:jti:{jti}", "active", ex=ttl)
+  caption={JTI store operations ($\approx$0.1\,ms/op).
+  The Lua script eliminates TOCTOU races.}]
+KEY = "nac:jti:"  # + jti uuid
 
-def revoke_jti(jti):                 # called after token is exchanged
-    redis.set(f"nac:jti:{jti}", "revoked", ex=300)
+def register_jti(jti, exp):  # auth server
+  ttl = max(1, int(exp-time.time()) + 60)
+  redis.set(KEY+jti, "active", ex=ttl)
 
-def is_jti_revoked(jti):             # called by worker before accepting
-    return redis.get(f"nac:jti:{jti}") == "revoked"
+def revoke_jti(jti):  # auth: audit marker
+  redis.set(KEY+jti, "revoked", ex=300)
+
+# Lua: atomic check + overwrite.
+# 1=ok, -1=replay, 0=absent (fail-closed).
+_CONSUME = """
+local v = redis.call('GET', KEYS[1])
+if v == false    then return 0  end
+if v ~= 'active' then return -1 end
+local t = redis.call('TTL', KEYS[1])
+if t<0 then t=tonumber(ARGV[1]) end
+redis.call('SETEX', KEYS[1], t,
+  'consumed:' .. ARGV[2])
+return 1
+"""
+
+def consume_jti(jti):  # worker: P4
+  r = redis.eval(_CONSUME, 1,
+    KEY+jti, "300",
+    str(int(time.time())))
+  if r != 1:
+    raise ValueError("TOKEN_REPLAY")
 \end{lstlisting}
 
 Any store satisfying the interface in Section~\ref{sec:solution} may be
@@ -1271,33 +1326,47 @@ RSA-2048 private signing key; worker processes reject any attempt to load the
 private key, preventing token forgery even under worker compromise.
 \textbf{Short-lived child tokens}: child tokens carry a significantly shorter
 TTL than the root token, minimising the replay window in the event that a
-\texttt{jti} revocation record is lost.
-\textbf{Typed error codes}: validation failures return structured string
-constants (\texttt{WRONG\_AUDIENCE}, \texttt{SCOPE\_INSUFFICIENT},
-\texttt{TOKEN\_REPLAY}), enabling the evaluation harness to distinguish
-security rejections from implementation bugs.
+\texttt{jti} state record is lost.
+\textbf{Typed error codes}: validation failures return named string
+constants (e.g., \texttt{TOKEN\_REPLAY}), enabling the harness to
+distinguish security rejections from implementation bugs.
 
 Listing~\ref{lst:validate} shows the \texttt{validate\_token} function shared
-by all four worker services. Each enforcement flag corresponds to one theorem:
-audience binding (Theorem~1), scope attenuation (Theorem~2), and JTI replay
-prevention (Theorem~4).
+by all four worker services. Each enforcement flag corresponds to one design
+property: audience binding (P1), scope attenuation (P2), delegation chain
+visibility (P3), and atomic single-use JTI enforcement (P4).
 
 \begin{lstlisting}[language=Python, label=lst:validate,
-  caption={Worker token validation (\texttt{nac\_common.py}); each check
-  corresponds to one theorem.}]
-def validate_token(token, expected_audience, required_scopes,
-                   enforce_jti=False):
-    # Theorem 1 (P1): raises InvalidAudienceError if aud mismatches
-    claims = jwt.decode(token, pub_key, algorithms=["RS256"],
-                        audience=expected_audience)
-    if enforce_jti and is_jti_revoked(claims["jti"]):
-        raise ValueError("TOKEN_REPLAY")        # Theorem 4
-    if any(s not in claims["scope"] for s in required_scopes):
-        raise ValueError("SCOPE_INSUFFICIENT")  # Theorem 2 (P2)
-    return claims
+  caption={Worker token validation; each check maps to one
+  design property (P1--P4).}]
+def validate_token(token, aud, scopes,
+    enforce_aud=True, enforce_chain=False,
+    enforce_jti=False, actors=None):
+  # P1: audience binding
+  if enforce_aud:
+    claims = jwt.decode(token, pub_key,
+      algorithms=["RS256"], audience=aud)
+  else:
+    claims = jwt.decode(token, pub_key,
+      algorithms=["RS256"],
+      options={"verify_aud": False})
+  # P4: atomic single-use (Redis Lua)
+  if enforce_jti:
+    jti = claims.get("jti")
+    if jti: consume_jti(jti)  # TOKEN_REPLAY
+  # P2: set-membership scope check
+  have = set(scope_to_list(claims.get("scope")))
+  need = [s for s in scopes if s not in have]
+  if need: raise ValueError("SCOPE_INSUFFICIENT")
+  # P3: delegation chain validation
+  if enforce_chain and actors is not None:
+    validate_actor_chain(claims, actors)
+  return claims
 \end{lstlisting}
 
 \subsection{Port Layout}
+
+Table~\ref{tab:ports} lists the port assignments for both stacks, which run concurrently to enable direct comparison.
 
 \begin{table}[h]
 \caption{Reference implementation port layout (two isolated stacks
@@ -1322,73 +1391,183 @@ Secure (NAC)        & 9300 & 9301 & 9302 & 9303 & 9304 & 9305 \\
 \label{sec:eval}
 %% ============================================================
 
-%% ---- FIGURE: Combined evaluation overview (full width) ----
+%% ---- FIGURE 6: Three-panel evaluation overview (full width) ---------------
+%% Panel (a): 3-config grouped bar — shows A3 JTI gap explicitly
+%% Panel (b): Per-hop linearity with ±σ error bars
+%% Panel (c): Overhead decomposition stacked bar (sequential vs concurrent)
 \begin{figure*}[!t]
 \centering
 \begin{tikzpicture}
 \begin{groupplot}[
   group style={
-    group size=2 by 1,
-    horizontal sep=1.8cm,
+    group size=3 by 1,
+    horizontal sep=1.9cm,
   },
-  width=0.46\textwidth,
-  height=5.0cm,
 ]
 
-%% ── Left panel: Attack block rates ──────────────────────────
+%% ── Panel (a): Block rate — 3 representative configurations ─────────────────
 \nextgroupplot[
-  ybar, bar width=10pt,
+  ybar, bar width=7pt,
   symbolic x coords={A1,A2,A3,A4},
   xtick=data,
-  ymin=0, ymax=115,
-  ylabel={Block / attribution rate (\%)},
-  title={\textbf{(a)}~Attack Mitigation ($N=30$)},
-  legend style={at={(0.5,-0.30)}, anchor=north, legend columns=2,
-                font=\scriptsize},
-  enlarge x limits=0.25,
-  nodes near coords, nodes near coords align=vertical,
-  every node near coord/.style={font=\scriptsize},
+  ymin=0, ymax=130,
+  width=0.31\textwidth,
+  height=6.4cm,
+  ylabel={Block rate (\%)},
+  title={\textbf{(a)}~Block Rate by Configuration ($N=30$)},
+  legend style={at={(0.5,-0.33)}, anchor=north, legend columns=1,
+                font=\scriptsize, draw=gray!40, fill=white},
+  enlarge x limits=0.22,
   tick label style={font=\scriptsize},
   label style={font=\scriptsize},
   title style={font=\small},
+  ymajorgrids=true,
+  grid style={dashed, gray!30},
+  ytick={0,25,50,75,100},
+  clip=false,
 ]
-\addplot[fill=C_BASE!80, draw=C_BASE!60!black]
+%% Baseline: 0% block rate — all attacks pass
+\addplot[fill=C_BASE!80, draw=C_BASE!60!black,
+  nodes near coords={\strut 0\%},
+  nodes near coords align=vertical,
+  every node near coord/.style={font=\tiny\bfseries,
+                                text=C_BASE!70!black, yshift=8pt}]
   coordinates {(A1,0)(A2,0)(A3,0)(A4,0)};
-\addplot[fill=C_SEC!80,  draw=C_SEC!60!black]
+%% Aud+Scope only: A1,A2,A4 blocked; A3 OPEN (no JTI — replay undetected)
+\addplot[fill=yellow!70!orange, draw=yellow!50!orange!80!black,
+  nodes near coords,
+  nodes near coords align=vertical,
+  every node near coord/.style={font=\tiny\bfseries,
+                                text=orange!80!black, yshift=5pt}]
+  coordinates {(A1,100)(A2,100)(A3,0)(A4,100)};
+%% Full NAC: 100% — all attacks blocked
+\addplot[fill=C_SEC!80, draw=C_SEC!60!black,
+  nodes near coords,
+  nodes near coords align=vertical,
+  every node near coord/.style={font=\tiny\bfseries,
+                                text=C_SEC!80!black}]
   coordinates {(A1,100)(A2,100)(A3,100)(A4,100)};
-\legend{Baseline (passthrough), Secure (Full NAC)}
+\legend{Baseline (0\%), Aud+Scope (partial), Full NAC (100\%)}
+%% Callout annotation: A3 is uniquely fixed by single-use JTI enforcement
+\node[font=\tiny\itshape, text=orange!80!black, align=center, anchor=south,
+      fill=white, inner sep=1pt]
+  at (axis cs:A3,127) {JTI\\gap};
+\draw[-{Stealth[length=3pt]}, thin, orange!60]
+  (axis cs:A3,124) -- (axis cs:A3,13);
 
-%% ── Right panel: Per-hop cost linearity ─────────────────────
+%% ── Panel (b): Per-hop cost with ±σ error bars ──────────────────────────────
 \nextgroupplot[
-  width=0.46\textwidth,
-  height=5.0cm,
+  width=0.30\textwidth,
+  height=6.4cm,
   xlabel={Delegation depth $k$},
   ylabel={Exchange cost (ms)},
-  title={\textbf{(b)}~Per-Hop Cost Linearity ($N=30$)},
-  xmin=0, xmax=11,
-  ymin=0,
-  legend style={at={(0.5,-0.30)}, anchor=north, legend columns=2,
+  title={\textbf{(b)}~Per-Hop Linearity: $\pm\sigma$ ($N=30$)},
+  title style={font=\small},
+  xmin=0, xmax=12,
+  ymin=0, ymax=25,
+  xtick={0,2,4,6,8,10},
+  ymajorgrids=true,
+  grid style={dashed, gray!30},
+  legend style={at={(0.5,-0.28)}, anchor=north, legend columns=2,
                 font=\scriptsize},
   tick label style={font=\scriptsize},
   label style={font=\scriptsize},
-  title style={font=\small},
 ]
-%% Measured data points
-\addplot[color=C_SEC, mark=*, mark size=1.8pt, thick]
-  coordinates {
-    (1,2.15)(2,4.27)(3,6.44)(5,10.73)(10,21.52)
+%% Measured data with ±σ error bars (σ from Table VII)
+\addplot[color=C_SEC, mark=*, mark size=2.2pt, thick,
+  error bars/.cd,
+    y dir=both, y explicit,
+  /pgfplots/error bar style={color=C_SEC!65!black, line width=0.8pt,
+    error mark options={rotate=90, mark size=2.5pt}},
+  nodes near coords,
+  every node near coord/.style={font=\tiny, anchor=south west,
+                                xshift=1pt, yshift=4pt,
+                                text=C_SEC!80!black}]
+  table[x=k, y=t, y error=s, col sep=space] {
+k   t      s
+1   2.15   0.24
+2   4.27   0.36
+3   6.44   0.44
+5   10.73  0.61
+10  21.52  0.89
   };
-%% Linear fit y = 2.15k
-\addplot[color=C_BASE, dashed, thick, domain=0:11]
-  {2.15*x};
-\legend{Measured, $y=2.15k$ ($R^2{=}0.9999$)}
+%% Theoretical fit y=2.15k
+\addplot[color=gray!65, dashed, thick, domain=0:11] {2.15*x};
+\legend{Measured $\pm\sigma$, $y=2.15k$\,ms}
+%% R² callout box
+\node[font=\scriptsize, fill=white, draw=gray!50, rounded corners=2pt,
+      inner sep=3pt, anchor=north west, text=C_SEC!80!black]
+  at (axis cs:0.3,24.5) {$R^2=0.9999$};
+
+%% ── Panel (c): Overhead decomposition — sequential vs concurrent ────────────
+\nextgroupplot[
+  xbar stacked,
+  width=0.33\textwidth,
+  height=6.4cm,
+  xmin=0, xmax=52,
+  clip=false,
+  ytick={0,1},
+  yticklabels={
+    {Concurrent (${\approx}11$\,ms)},
+    {Sequential (${\approx}45$\,ms)}},
+  ymin=-0.6, ymax=1.6,
+  bar width=14pt,
+  xlabel={Overhead (ms)},
+  title={\textbf{(c)}~Overhead Decomposition ($k\!=\!4$)},
+  title style={font=\small},
+  xmajorgrids=true,
+  grid style={dashed, gray!30},
+  xtick={0,10,20,30,40,45},
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+  legend style={at={(0.5,-0.33)}, anchor=north, legend columns=2,
+                font=\tiny, draw=gray!40},
+]
+%% RSA-2048 signing ×4 — irreducible cryptographic cost
+\addplot[fill=C_SEC!80, draw=C_SEC!60!black]
+  coordinates {(12,1)(3,0)};
+\addlegendentry{RSA sign (${\times}4$)};
+%% HTTP round-trips ×4 to auth server — eliminable via co-location
+\addplot[fill=C_BASE!80, draw=C_BASE!60!black]
+  coordinates {(22,1)(5.5,0)};
+\addlegendentry{HTTP (reducible)};
+%% JTI store ops ×8 (register + consume)
+\addplot[fill=C_PAR!80, draw=C_PAR!60!black]
+  coordinates {(0.8,1)(0.8,0)};
+\addlegendentry{JTI store (${\times}8$)};
+%% Worker JWT verification ×4
+\addplot[fill=yellow!70!orange, draw=yellow!50!orange!80!black]
+  coordinates {(8,1)(2,0)};
+\addlegendentry{JWT verify (${\times}4$)};
+%% Other overhead
+\addplot[fill=gray!45, draw=gray!60]
+  coordinates {(2,1)(0.5,0)};
+\addlegendentry{Other};
+%% Total labels to the right of each bar
+\node[font=\scriptsize\bfseries, anchor=west, text=C_HEAD]
+  at (axis cs:46, 1) {45\,ms};
+\node[font=\scriptsize\bfseries, anchor=west, text=C_HEAD]
+  at (axis cs:12.3, 0) {11\,ms};
+%% Annotation: HTTP dominates sequential, disappears in concurrent
+\node[font=\tiny\itshape, text=C_BASE!80!black, align=center]
+  at (axis cs:23, 1.42) {HTTP 49\%};
+\node[font=\tiny\itshape, text=C_SEC!80!black, align=center]
+  at (axis cs:1.5, -0.42) {${\approx}75\%$ reduction};
 
 \end{groupplot}
 \end{tikzpicture}
-\caption{Evaluation summary. \textbf{(a)}~Attack block/attribution rate:
-Full NAC achieves 100\% on all four attacks; token passthrough achieves 0\%.
-\textbf{(b)}~Per-hop cryptographic exchange cost confirms $O(k)$ linearity
-($y = 2.15k$\,ms, $R^2 = 0.9999$, $k = 1 \ldots 10$).}
+\caption{Evaluation summary ($N=30$ trials throughout).
+\textbf{(a)}~Attack block rate for three enforcement configurations:
+Baseline (orange) blocks 0\%; Aud+Scope alone (amber) blocks A1, A2, A4,
+but fails on A3 because scope and audience checks verify token \emph{structure},
+not single-use semantics---only atomic JTI consumption closes that gap;
+Full NAC (blue) achieves 100\% by adding all three properties.
+\textbf{(b)}~Per-hop exchange cost with $\pm\sigma$ error bars confirms $O(k)$
+linearity ($y=2.15k$\,ms, $R^2=0.9999$, $k=1\ldots10$).
+\textbf{(c)}~Overhead decomposition for a 4-worker orchestration: HTTP
+round-trips (49\% of sequential cost) are eliminable by co-locating the
+authorization server with the hub; concurrent issuance reduces
+total overhead from ${\approx}45$\,ms (sequential) to ${\approx}11$\,ms.}
 \label{fig:eval_summary}
 \end{figure*}
 
@@ -1401,8 +1580,8 @@ are sufficient to detect systematic failures given deterministic cryptographic
 enforcement.
 
 Latency is measured end-to-end over 30~live rounds of the
-\texttt{prepare\_daily\_briefing} workflow (4~token exchanges $+$ 4~worker
-calls $+$ 8~revocation store operations in the secure stack). Timing uses a
+\texttt{prepare\_daily\_\allowbreak briefing} workflow (4~token exchanges $+$ 4~worker
+calls $+$ 8~JTI store operations in the secure stack). Timing uses a
 high-resolution monotonic counter within the MCP client session. The 95\%
 confidence interval is computed as
 $\bar{x} \pm t_{29,0.025} \cdot \sigma/\sqrt{N}$ with $t_{29} = 2.045$.
@@ -1412,41 +1591,49 @@ production workers execute, with enforcement flags toggled per configuration.
 Tokens are real RSA-2048 signed JWTs; all 720 trials are fully empirical with
 no mocking of cryptographic operations.
 
+\textbf{Evaluation platform:} All measurements were collected on a single
+consumer-grade machine (AMD Ryzen, 16\,GB RAM, Windows~11) running
+Python~3.13, redis-py~7.4, PyJWT~2.9, FastAPI~0.115, and Redis~7 (Docker).
+The key finding of this evaluation is \textit{relative} overhead
+($+35.6\%$), not absolute latency; the supplementary repository includes a
+full environment manifest and reproduction scripts.
+
 \subsection{Attack Mitigation}
 
 \begin{table}[h]
-\caption{Attack mitigation results ($N=30$ trials per cell). Each cell reports
-the number of trials in which the attack succeeded. A result of 0/30 indicates
-complete blocking; 30/30 indicates the attack was unimpeded.}
+\caption{Attack mitigation results ($N=30$ per cell)}
 \label{tab:attacks}
 \centering
 \footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{llccc}
+\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llccl}
 \toprule
-\textbf{ID} & \textbf{Attack} & \textbf{Baseline} & \textbf{Secure} & \textbf{Error Code / Metric} \\
+\textbf{ID} & \textbf{Attack} & \textbf{Base} & \textbf{NAC} & \textbf{Code / Metric} \\
 \midrule
-A1 & Scope escalation    & 100\% succeed & 0\%  & \texttt{SCOPE\_INSUFFICIENT} \\
-A2 & Lateral movement    & 100\% succeed & 0\%  & \texttt{WRONG\_AUDIENCE} \\
-A3 & Token replay        & 100\% succeed & 0\%  & \texttt{TOKEN\_REPLAY} \\
-A4 & Attribution (audit) & 0\% attributed & 100\% & \textit{attribution rate} \\
+A1 & Scope escalation    & 100\% pass & 0\%  & \texttt{SCOPE\_INSUFF.} \\
+A2 & Lateral movement    & 100\% pass & 0\%  & \texttt{WRONG\_AUD} \\
+A3 & Token replay        & 100\% pass & 0\%  & \texttt{TOKEN\_REPLAY} \\
+A4 & Attribution (audit) & 0\% attr.  & 100\% attr. & \textit{attrib.\ rate\textsuperscript{†}} \\
 \bottomrule
-\end{tabular}
+\multicolumn{5}{l}{\scriptsize\textsuperscript{†}A4 measures attribution
+  accuracy, not block rate; see Section~\ref{sec:ablation}.}
+\end{tabular}%
+}
 \end{table}
 
-Figure~\ref{fig:eval_summary}(a) visualises the results.
-The NAC pattern achieves a 100\% block rate across all attack vectors in all
-30~trials. These results are not surprising --- they are the expected
-consequence of Theorems~1--4. A1 is blocked because Theorem~2 (P2) guarantees
-scope attenuation is enforced before any child token is issued. A2 is blocked
-because Theorem~1 (P1) guarantees $\texttt{aud}(T_i) = \mathrm{AUDIENCE}(W_i)$
-by construction. A3 is blocked because Theorem~4 guarantees the \texttt{jti}
-is revoked after first use. A4 is resolved because Theorem~3 (P3) guarantees
-a cryptographically signed \texttt{act} chain in every child token. The
-100\% rate confirms that the implementation faithfully realises all four
-theorems with no edge cases.
+Table~\ref{tab:attacks} reports the trial counts; Figure~\ref{fig:eval_summary}(a) visualises the results.
+The NAC pattern blocked A1--A3 in all 30 trials and achieved 100\%
+attribution for A4. The results confirm that the implementation faithfully
+realises
+Design Properties~\ref{thm:p1}--\ref{thm:replay} with no observed edge cases:
+A1 is blocked by Property~\ref{thm:p2} (scope attenuation enforced at issuance);
+A2 is blocked by Property~\ref{thm:p1} ($\texttt{aud}(T_i)=\mathrm{AUDIENCE}(W_i)$
+by construction); A3 is blocked by Property~\ref{thm:replay} (\texttt{jti}
+atomically consumed on first use); and A4 is resolved by Property~\ref{thm:p3}
+(cryptographically signed \texttt{act} chain in every child token).
 
-\subsection{Ablation Study: Property Independence}
+\subsection{Ablation: P1, P2, P4 Independence with P3 Attribution}
 \label{sec:ablation}
 
 Table~\ref{tab:ablation} reports an empirical ablation study: six enforcement
@@ -1510,17 +1697,28 @@ when scope attenuation is enforced at the authorization server.
 \textbf{Finding 2 — A2 requires Audience (P1):} A calendar-bound token carries
 $\texttt{aud}=W_1$, rejected by the docs worker expecting $\texttt{aud}=W_2$.
 
-\textbf{Finding 3 — A3 requires JTI revocation:} Audience and scope checks
-verify the token's \textit{structure}; only JTI revocation detects whether the
-same structurally valid token is being used a second time.
+\textbf{Finding 3 — A3 requires single-use JTI enforcement:} Audience and scope
+checks verify the token's \textit{structure}; only atomic JTI consumption
+detects whether the same structurally valid token is being presented a second
+time.
 
 \textbf{Finding 4 — A4 resolved by any exchange:} Identity attribution is
 created at exchange time. Any configuration that performs RFC 8693 exchange
 produces an attributable token; token passthrough leaves the chain empty.
+Note that A4 measures attribution accuracy rather than exploit blocking, and it
+is present in every configuration that performs exchange because P3 (delegation
+chain visibility) is a structural property of the exchange operation itself,
+not a separately toggled enforcement flag. A4 therefore demonstrates the
+\textit{benefit} of P3, not its independent ablation in the same sense as
+P1--P2.
 
-\textbf{Conclusion:} Each of audience binding, scope attenuation, and JTI
-revocation addresses a strictly orthogonal attack surface. No property is
-redundant; only Full NAC blocks all four attacks simultaneously.
+\textbf{Conclusion:} Audience binding (P1), scope attenuation (P2), and
+single-use JTI enforcement (P4) each address a strictly orthogonal attack
+surface and were independently ablated. Delegation chain visibility (P3) is a structural outcome
+of exchange and was confirmed through A4 by comparing exchange-present versus
+exchange-absent configurations. Only Full NAC enforces all four properties
+simultaneously; every partial configuration leaves at least one attack vector
+open.
 
 \subsubsection{Scope-Only and Lateral Movement}
 \label{sec:scope_caveat}
@@ -1535,7 +1733,7 @@ and P2 as separate independently enforced properties.
 \subsection{Latency Analysis}
 
 \begin{table}[h]
-\caption{End-to-end latency of \texttt{prepare\_daily\_briefing} ($N=30$)}
+\caption{End-to-end latency of the briefing workflow ($N=30$)}
 \label{tab:latency}
 \centering
 \footnotesize
@@ -1567,16 +1765,18 @@ confirms both predictions. The measured sequential overhead of $+35.6\%$
 ($125.1 \pm 3.7$\,ms baseline vs.\ $169.6 \pm 4.7$\,ms secure; 95\% CI via
 $t_{29} = 2.045$) reflects a worst-case single-machine, single-worker
 authorization server with no co-location. The $\sigma$-ratio of $1.26\times$
-confirms that NAC overhead is predictable---the revocation store eliminates
-cross-process scheduling jitter. The theoretical concurrent bound of $+8.9\%$
+confirms that NAC overhead is predictable---the store contributes minimal
+additional variance in this configuration. The theoretical concurrent bound of $+8.9\%$
 represents the expected latency with a multi-worker authorization server enabling
 truly parallel RSA signing.
 
 \subsection{Overhead Decomposition}
 \label{sec:overhead}
 
+Table~\ref{tab:decomp} and Figure~\ref{fig:eval_summary}(c) break down the measured $+44.5$\,ms overhead into its constituent operations.
+
 \begin{table}[h]
-\caption{Latency overhead decomposition (per \texttt{prepare\_daily\_briefing})}
+\caption{Latency overhead decomposition (per briefing workflow)}
 \label{tab:decomp}
 \centering
 \footnotesize
@@ -1586,7 +1786,7 @@ truly parallel RSA signing.
 \midrule
 RSA-2048 signing $\times 4$         & $\approx 12$\,ms  & $\approx 27\%$ \\
 HTTP round-trips to auth $\times 4$ & $\approx 22$\,ms  & $\approx 49\%$ \\
-Revocation store ops $\times 8$     & $\approx 0.8$\,ms & $\approx 2\%$  \\
+JTI store ops $\times 8$            & $\approx 0.8$\,ms & $\approx 2\%$  \\
 Worker JWT verification $\times 4$  & $\approx 8$\,ms   & $\approx 18\%$ \\
 Other overhead                      & $\approx 2$\,ms   & $\approx 4\%$  \\
 \midrule
@@ -1596,7 +1796,7 @@ Other overhead                      & $\approx 2$\,ms   & $\approx 4\%$  \\
 \end{tabular}
 \end{table}
 
-The revocation store contributes only $\approx 2\%$ of total overhead. The
+The JTI store contributes only $\approx 2\%$ of total overhead. The
 dominant costs---RSA signing ($27\%$) and HTTP transport ($49\%$)---are
 reducible through standard production engineering: multi-worker authorization
 server for parallel signing, and a service mesh or Unix sockets for sub-ms
@@ -1626,7 +1826,7 @@ inter-service transport.
 
 Table~\ref{tab:hopcosts} and Figure~\ref{fig:eval_summary}(b) empirically
 confirm the $O(k)$ bound of Proposition~\ref{prop:overhead}.
-Each additional delegation hop adds a constant $\approx 2.15$\,ms (one RSA-2048 sign plus one revocation store
+Each additional delegation hop adds a constant $\approx 2.15$\,ms (one RSA-2048 sign plus one JTI store
 write) --- exactly the irreducible per-hop constant the proposition
 identifies. This linearity follows from the independence argument in the
 proof: each hop performs a constant-cost operation with no
@@ -1634,12 +1834,16 @@ inter-hop dependency; the $R^2 = 0.9999$ fit over ten data points (not merely
 three) confirms $O(k)$ overhead, providing a reliable model for production
 capacity planning.
 
-\textbf{Production estimate}: With a dedicated authorization server and
-co-located revocation store, we project $\approx 3.2$\,ms per hop (3\,ms RSA
-$+$ 0.1\,ms store update), or \textbf{$+7$--$15\%$} relative to baseline for
-a 4-worker orchestration with concurrent issuance.
+\textbf{Production projection} (not measured): With a dedicated authorization
+server and co-located JTI store, we estimate $\approx 3.2$\,ms per hop
+(3\,ms RSA $+$ 0.1\,ms store update), or $+7$--$15\%$ relative to baseline
+for a 4-worker orchestration with concurrent issuance. This projection assumes
+sufficient authorization-server parallelism and negligible queueing delay;
+actual overhead will depend on deployment topology.
 
 \subsection{Token Size Overhead}
+
+Table~\ref{tab:tokensizes} reports the token size growth introduced by the \texttt{act} claim at each delegation depth.
 
 \begin{table}[h]
 \caption{JWT token size overhead by delegation depth. Sizes are measured in bytes
@@ -1674,6 +1878,7 @@ Auth0 free-tier tenant. The root token $T_0$ was obtained via the M2M
 \texttt{client\_credentials} grant; all four child tokens were issued by the
 RFC 8693 exchange sidecar after validating $T_0$ against Auth0's live JWKS
 endpoint. No changes were made to the worker services or the validation logic.
+Results are summarised in Table~\ref{tab:auth0}.
 
 \begin{table}[h]
 \caption{Real-IdP validation against live Auth0 tenant ($N=30$)}
@@ -1703,10 +1908,14 @@ $5$\,ms of HTTP loopback overhead to the sidecar process; the intrinsic
 RSA-2048 cryptographic cost is unchanged. The Auth0 token acquisition latency
 ($418$\,ms mean) reflects network RTT to Auth0's free-tier US endpoint and is
 an infrastructure constant independent of the NAC mechanism; in production it is
-amortised across thousands of requests through root-token caching (TTL
-$=86{,}400$\,s) and reduced to $10$--$20$\,ms with an enterprise-tier or
-co-located identity provider. This validates the claim that the NAC pattern is
-authorization-server-agnostic by construction.
+amortised across orchestration rounds through root-token caching (TTL
+$=86{,}400$\,s); the parent token is multi-use for exchange
+(Section~\ref{sec:impl}), so a single cached root token can serve repeated
+fan-out batches.  Enterprise-tier or co-located identity providers reduce
+acquisition latency further to $10$--$20$\,ms. This provides preliminary evidence that the NAC exchange mechanism is
+compatible with external identity providers; confirming portability against
+Keycloak and Microsoft Entra remains future work
+(Section~\ref{sec:limitations}).
 
 %% ============================================================
 \section{Discussion}
@@ -1715,11 +1924,11 @@ authorization-server-agnostic by construction.
 
 \subsection{Why Token Passthrough Persists}
 
-Three structural factors sustain token passthrough despite its risks:
+Three structural factors sustain token passthrough despite its risks.
 
-\textbf{Functional transparency of the anti-pattern}: Token passthrough is
-functionally correct. Workers respond; workflows complete. There is no rejection
-or error to signal to the developer that a security boundary has been crossed.
+\textbf{Functional transparency}: Token passthrough is functionally correct ---
+workers respond, workflows complete, and no error signals to the developer that
+a security boundary has been crossed.
 
 \textbf{Perceived complexity of RFC 8693}: Token exchange is widely perceived
 as heavyweight. In practice, each per-hop exchange is a single HTTP POST;
@@ -1730,8 +1939,9 @@ providers \cite{rfc8693_deploy}.
 \cite{mcp_spec_2025} addresses client-to-server authorization but does not yet
 prescribe the mechanism for server-to-downstream authorization. The June 2025
 revision explicitly prohibits token forwarding but does not prescribe RFC 8693.
-This paper addresses that gap by providing the first formal prescription of the
-RFC 8693 NAC pattern for MCP hub-to-worker delegation.
+This paper addresses that gap with a concrete architectural prescription of the
+RFC 8693 NAC pattern for MCP hub-to-worker delegation, supported by ablation
+evidence and empirical overhead measurements.
 
 \subsection{The Scope-Only Lateral Movement Nuance}
 
@@ -1751,10 +1961,10 @@ needed. For IdPs without native support, a lightweight sidecar---validated
 end-to-end against Auth0 in Section~\ref{sec:auth0_validation}---proxies
 exchange requests. The minimum integration steps are:
 (1)~\textbf{register per-service audiences} at the IdP;
-(2)~\textbf{update the hub} to fire one \texttt{POST /token/exchange} per worker
-via \texttt{asyncio.gather} ($<$50 lines of change);
+(2)~\textbf{update the hub} to fire one exchange request per worker
+via concurrent dispatch ($<$50 lines of change);
 (3)~\textbf{enable worker validation} of \texttt{aud}, \texttt{scope}, \texttt{act}
-depth, and \texttt{jti} revocation in shared middleware.
+depth, and atomic \texttt{jti} consumption in shared middleware.
 
 \subsection{Threat Model Boundaries}
 
@@ -1793,7 +2003,7 @@ RFC 8693 \cite{rfc8693} is deployed at scale by Box, Microsoft, Salesforce, and
 RedHat \cite{rfc8693_deploy}. Auth0's Token Vault \cite{auth0_token_vault} and
 ZITADEL's token exchange \cite{zitadel_te} implement the specification for SaaS
 AI agent use cases. ToolHive \cite{toolhive} applies RFC 8693 to MCP server
-orchestration in Kubernetes. Our work extends these to formal security analysis
+orchestration in Kubernetes. Our work extends these with systematic security property analysis
 and empirical ablation.
 
 \subsection{MCP Security Analysis}
@@ -1802,9 +2012,8 @@ Checkmarx \cite{checkmarx_mcp}, Solo.io \cite{solo_mcp}, and Aembit
 \cite{aembit_mcp} each identify confused deputy attacks from token passthrough.
 CoSAI \cite{cosai_mcp} provides a comprehensive threat taxonomy and recommends
 RFC 8693. Schneider \cite{schneider_mcp} frames the confused deputy as Layer 2
-of a defense-in-depth architecture. Our work is the first to provide formal
-property characterisation, ablation evidence, and overhead quantification for the
-recommended remedy.
+of a defense-in-depth architecture. Our work contributes a systematic property decomposition, ablation evidence, and
+overhead quantification for the recommended remedy.
 
 \subsection{LLM Agent Security}
 
@@ -1825,6 +2034,15 @@ quantified overhead.
 Absolute values are environment-dependent; relative overhead is the meaningful
 comparison.
 
+\textbf{Controlled baseline}: The insecure baseline intentionally disables all
+token validation to establish a clean lower bound for the attack study. This
+controlled design is appropriate for isolating the security contribution of each
+property but is not representative of a realistic partial deployment. A stronger
+evaluation would also compare against alternatives such as centralized token
+vaults, sender-constrained tokens, or introspection-based delegation, each of
+which provides partial protection with different trade-offs. We identify this
+as the primary area for extending the evaluation in future work.
+
 \textbf{Stub services}: Worker business logic returns deterministic stub data.
 The security properties under evaluation---audience binding, scope attenuation,
 and delegation chain visibility---are enforced at the token validation layer and
@@ -1834,12 +2052,13 @@ weakens the attack outcome results.
 
 \textbf{Simulated authorization flow}: The custom demo server simulates user
 consent without a browser-based PKCE exchange. Redirect URI validation is
-enforced in the secure stack (mismatched URIs are rejected). Full end-to-end
-compatibility with a production PKCE flow is confirmed by the Auth0 validation
-(Section~\ref{sec:auth0_validation}), which uses a live Auth0 tenant that
-enforces PKCE for all M2M token issuance.
+enforced in the secure stack (mismatched URIs are rejected). The Auth0
+validation (Section~\ref{sec:auth0_validation}) confirms sidecar integration
+against a live identity provider using the M2M \texttt{client\_credentials}
+grant; browser-based PKCE flow compatibility is a standard property of
+OAuth 2.1-compliant servers and is not separately exercised in this evaluation.
 
-\textbf{Single revocation store instance}: Production deployments should use a
+\textbf{Single JTI store instance}: Production deployments should use a
 highly available configuration (replicated cluster with sentinel failover).
 
 \textbf{Token refresh}: Long-running sessions require periodic root token refresh
@@ -1849,14 +2068,14 @@ highly available configuration (replicated cluster with sentinel failover).
 Several directions remain open for future work.
 \textit{Prompt injection interaction}: it is not yet established whether prompt
 injection that drives an agent to call a tool can also gain access to the
-resulting child tokens; the one-time-use \texttt{jti} semantics should limit
-damage, but a formal analysis remains open.
+resulting child tokens; single-use \texttt{jti} semantics may limit
+replay-based damage, but this interaction is not evaluated here.
 \textit{Concurrent agent stress test}: a stress test harness
-(\texttt{run\_concurrent\_stress.py}) is included in the supplementary
+(supplementary file \texttt{run\_concurrent\_\allowbreak stress.py}) is included in the
 repository and has been executed. Five simultaneous agents shared one root
 token across 30 rounds each (600~total exchange operations); all 600
 succeeded with zero false positives, confirming that the Redis JTI store
-handles concurrent registrations and revocations correctly under multi-agent
+handles concurrent registrations and consumptions correctly under multi-agent
 load (throughput: 143~exchanges/s on the evaluation machine).
 \textit{Additional IdP portability}: Auth0 M2M validation is complete
 (Section~\ref{sec:auth0_validation}); confirming portability against Keycloak 17
@@ -1864,10 +2083,12 @@ and Microsoft Entra OBO remains open.
 \textit{Formal verification}: modelling the exchange protocol in ProVerif
 \cite{blanchet2001} or Tamarin \cite{meier2013} under the Dolev-Yao adversary
 model would provide a stronger security guarantee than empirical evaluation alone.
-\textit{Persistent-session token caching}: evaluating whether caching recently
-issued child tokens for a short TTL (e.g., 5\,s) can reduce per-request exchange
-overhead in high-frequency agentic loops is a promising direction for reducing
-the absolute overhead figure.
+\textit{Exchange-input caching}: evaluating whether caching parent-token
+validation results or batching multiple child-token issuances in a single
+authorization-server round-trip can reduce per-request exchange overhead in
+high-frequency agentic loops is a promising optimization direction.  (Note:
+caching \textit{child} tokens would conflict with P4 single-use semantics
+unless carefully scoped to pre-first-presentation only.)
 
 
 \FloatBarrier  %% Flush remaining floats before Conclusion
@@ -1877,32 +2098,35 @@ the absolute overhead figure.
 \label{sec:conclusion}
 %% ============================================================
 
-This paper presents the first formal analysis and empirical evaluation of the
-RFC~8693 NAC pattern for MCP multi-agent agentic workflows. Token
+This paper presents a systematic characterisation and empirical evaluation of the
+RFC~8693 NAC pattern for MCP agentic workflows. Token
 passthrough---the current default in MCP implementations---simultaneously
 violates three independent security properties: audience binding (P1), scope
 attenuation (P2), and delegation chain visibility (P3). RFC 8693 NAC restores
 all three by construction, as each delegation hop issues a fresh token with a
-service-specific audience, an attenuated scope, a verifiable actor chain, and a
-one-time-use identifier. A 720-trial ablation study confirms that each property
-is independently necessary: no single property, and no two-property combination,
-blocks all four attack vectors. Per-hop cryptographic overhead is measured at
-$\approx 2.15$\,ms (one RSA-2048 sign plus one revocation store update),
-yielding $O(k)$ total cost for $k$-hop chains ($R^2 = 0.9999$ over
-$k=1\ldots10$); end-to-end measured overhead is $+35.6\%$ on a single machine,
-with production deployment overhead projected at $+7$--$15\%$ relative to the
-insecure baseline with a dedicated authorization server. Finally, the RFC 8693
-sidecar integration path was validated end-to-end against a live Auth0 tenant
-($N=30$), with all four attacks blocked in 100\% of trials using real Auth0 M2M
-root tokens, confirming that the pattern is authorization-server-agnostic by
-construction and requires no changes to the worker services.
+service-specific audience, an attenuated scope, a verifiable actor chain, and
+an atomically consumed single-use identifier (P4). A 720-trial ablation study
+confirms that audience binding (P1), scope attenuation (P2), and single-use
+JTI enforcement (P4) each address an orthogonal attack surface; delegation chain
+visibility (P3) is a structural outcome of token exchange confirmed through
+attribution testing. No partial combination blocks all attack vectors. Per-hop
+cryptographic overhead is measured at $\approx 2.15$\,ms (one RSA-2048 sign
+plus one JTI store update), yielding $O(k)$ total cost for $k$-hop
+chains ($R^2 = 0.9999$ over $k=1\ldots10$); end-to-end measured overhead is
+$+35.6\%$ on a single machine, with production deployment overhead projected at
+$+7$--$15\%$ relative to the baseline with a dedicated authorization server.
+The RFC 8693 sidecar integration path was validated against a live Auth0 M2M
+tenant ($N=30$), providing preliminary evidence of compatibility with external
+identity providers; user-delegated PKCE flows and additional IdP portability
+remain future work.
 
-The pattern is authorization-server-agnostic, language-agnostic, and
-implementable with standard OAuth 2.1 infrastructure available in all major
-enterprise identity providers. As MCP becomes the backbone of enterprise agentic
-AI infrastructure, securing the delegation layer between the orchestrator and its
-worker services is a foundational requirement. RFC 8693 NAC provides the
-architectural pattern to satisfy it.
+Adopting the pattern requires adding standard OAuth 2.1 token validation
+middleware to worker services; tool implementations and the MCP message format
+are unchanged. The pattern is language-agnostic and compatible with standard OAuth 2.1
+components available in common enterprise identity-provider stacks.
+As MCP becomes the backbone of enterprise agentic AI, securing the
+hub-to-worker delegation layer is a foundational requirement; RFC 8693 NAC
+provides the architectural pattern to satisfy it.
 
 \FloatBarrier  %% Force all pending floats before this point
 
@@ -1913,34 +2137,15 @@ reproduction instructions are openly available on GitHub \cite{nac_mcp_impl}.
 A citable, versioned archive of the code is deposited on Zenodo
 \cite{nac_mcp_impl} for long-term reproducibility.
 
-%% ── Mandatory disclosure statements ──────────────────────────────────────────
-\section*{Author Contributions}
-\textbf{Conceptualisation}: N.~Patel; \textbf{Methodology}: N.~Patel;
-\textbf{Software}: N.~Patel; \textbf{Formal analysis}: N.~Patel;
-\textbf{Writing---original draft}: N.~Patel;
-\textbf{Writing---review \& editing}: N.~Patel;
-\textbf{Visualisation}: N.~Patel.
-(CRediT taxonomy: \url{https://credit.niso.org})
-
-\section*{Conflict of Interest Statement}
-The authors declare that the research was conducted in the absence of any
-commercial or financial relationships that could be construed as a potential
-conflict of interest.
-
 \section*{Data Availability Statement}
-All code, evaluation scripts, server implementations, and raw result files
-(\texttt{eval\_results.json}, \texttt{ablation\_results.json},
-\texttt{stress\_results.json}) are publicly available in the GitHub repository
-cited as \cite{nac_mcp_impl}. A permanent, versioned archive is deposited on
+All code, evaluation scripts, server implementations, and raw JSON
+result files are publicly available in the GitHub repository cited as
+\cite{nac_mcp_impl}. A permanent, versioned archive is deposited on
 Zenodo to ensure long-term availability independent of the GitHub repository.
 
-\section*{Ethics Statement}
-This study did not involve human participants, animal subjects, personal data,
-or sensitive information. No institutional ethics review was required.
-
 \section*{Funding}
-[State funding sources, or: This research received no specific grant from any
-funding agency in the public, commercial, or not-for-profit sectors.]
+This research received no specific grant from any funding agency in the public,
+commercial, or not-for-profit sectors.
 
 \balance
 
@@ -1993,7 +2198,7 @@ D.\ Hardt (Ed.),
 \bibitem{oauth21}
 D.\ Hardt, A.\ Parecki, and T.\ Lodderstedt,
 ``The OAuth 2.1 Authorization Framework,''
-IETF Internet-Draft, 2023.
+IETF Internet-Draft draft-ietf-oauth-v2-1-15, Mar.\ 2026.
 
 \bibitem{rfc7009}
 T.\ Lodderstedt, S.\ Dronia, and M.\ Scurtescu,
@@ -2020,12 +2225,6 @@ OWASP Foundation,
 ``OWASP Top 10 for Large Language Model Applications 2025,'' 2024.
 [Online]. Available:
 \url{https://owasp.org/www-project-top-10-for-large-language-model-applications/}
-
-\bibitem{vaswani2017}
-A.\ Vaswani \textit{et al.},
-``Attention is All You Need,''
-in \textit{Advances in Neural Information Processing Systems (NeurIPS)},
-vol.\ 30, 2017.
 
 \bibitem{wang2024survey}
 L.\ Wang \textit{et al.},
@@ -2093,10 +2292,6 @@ CNCF SPIFFE Project,
 ``Secure Production Identity Framework for Everyone (SPIFFE),'' 2024.
 [Online]. Available: \url{https://spiffe.io}
 
-\bibitem{google_a2a}
-Google LLC, ``Agent-to-Agent (A2A) Protocol,'' 2024.
-[Online]. Available: \url{https://google.github.io/A2A}
-
 \bibitem{ietf_caam}
 B.\ Campbell \textit{et al.},
 ``Cross-domain Attributes in Authentication and Authorization Mechanisms,''
@@ -2111,12 +2306,6 @@ in \textit{Proc.\ 14th IEEE CSFW}, 2001.
 S.\ Meier, B.\ Schmidt, C.\ Cremers, and D.\ Basin,
 ``The TAMARIN Prover for the Symbolic Analysis of Security Protocols,''
 in \textit{Proc.\ CAV}, 2013.
-
-\bibitem{mcp_wiki}
-Wikipedia,
-``Model Context Protocol,'' Mar.\ 2026.
-[Online]. Available:
-\url{https://en.wikipedia.org/wiki/Model_Context_Protocol}
 
 \end{thebibliography}
 

@@ -316,9 +316,9 @@ async def phase_a3_token_replay(t1: str) -> None:
     t1_jti    = t1_claims.get("jti", "")
 
     print(f"  T₁ JTI: {t1_jti}")
-    print("  Simulating first use: worker revokes T₁ JTI in Redis ...")
+    print("  Simulating first use: worker consumes T₁ JTI in Redis ...")
     if t1_jti:
-        revoke_jti(t1_jti)
+        revoke_jti(t1_jti)  # simulates consumption (marks as non-active)
 
     print("  Simulating replay: second use of same T₁ ...")
     try:

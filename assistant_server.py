@@ -454,7 +454,7 @@ def make_assistant_app(
             if result.get("error_code"):
                 return [TextContent(type="text", text=json.dumps({
                     "attack":  "token_replay",
-                    "outcome": f"BLOCKED — {result['error_code']}: jti was revoked after first use",
+                    "outcome": f"BLOCKED — {result['error_code']}: jti atomically consumed on first use",
                     "mode":    mode,
                 }, indent=2))]
             return [TextContent(type="text", text=json.dumps({

@@ -225,13 +225,8 @@ def make_worker_app(
             body = json.loads(err_response.body) if hasattr(err_response, "body") else {"error": "forbidden"}
             return [TextContent(type="text", text=json.dumps(body))]
 
-        # Revoke the child token's jti after successful validation (one-time-use).
-        # Redis SET takes ~0.1 ms — called inline without threading.
-        if secure and claims is not None:
-            from nac_common import revoke_jti as _revoke
-            child_jti = claims.get("jti", "")
-            if child_jti:
-                _revoke(child_jti)
+        # JTI was atomically consumed inside validate_token() (consume_jti).
+        # No separate revocation step needed here.
 
         payload = service_logic[name](arguments)
         payload["token_sub"]   = claims.get("sub")
