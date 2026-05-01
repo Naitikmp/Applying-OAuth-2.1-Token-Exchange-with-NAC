@@ -1,0 +1,148 @@
+# docker-compose for the real distributed NAC evaluation.
+#
+# Brings up 6 containers on a shared Docker bridge network:
+#   - redis          (JTI state store)
+#   - oauth          (RFC 8693 exchange endpoint)
+#   - w-calendar     (bench worker, aud=calendar-service)
+#   - w-docs         (bench worker, aud=docs-service)
+#   - w-comms        (bench worker, aud=comms-service)
+#   - w-extapi       (bench worker, aud=external-api-service)
+#
+# Each worker runs its own container; inter-service communication crosses
+# the Docker bridge, producing genuine HTTP RTT.  A shared volume holds the
+# RSA signing keypair so oauth can sign and workers can verify.
+#
+# Usage:
+#   docker compose -f docker-compose.distributed.yml up --build -d
+#   python run_distributed_real.py --trials 30
+#   docker compose -f docker-compose.distributed.yml down
+
+name: nac-distributed
+
+services:
+  redis:
+    image: redis:7-alpine
+    networks: [nacnet]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 1s
+      retries: 20
+
+  oauth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "service_bench_oauth.py"]
+    environment:
+      SECURE: "1"
+      PORT: "9300"
+      NAC_REDIS_URL: "redis://redis:6379/0"
+      NAC_KEY_DIR: "/app/.nac_keys"
+    volumes:
+      - nac-keys:/app/.nac_keys
+    networks: [nacnet]
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "9300:9300"
+
+  w-calendar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "service_bench_worker:app", "--host", "0.0.0.0", "--port", "9302", "--log-level", "warning"]
+    environment:
+      WORKER_NAME: "calendar"
+      REQUIRED_SCOPES: "calendar:read"
+      SECURE: "1"
+      NAC_PUBLIC_ONLY: "1"
+      NAC_REDIS_URL: "redis://redis:6379/0"
+      NAC_KEY_DIR: "/app/.nac_keys"
+    volumes:
+      - nac-keys:/app/.nac_keys:ro
+    networks: [nacnet]
+    depends_on:
+      oauth:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "9302:9302"
+
+  w-docs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "service_bench_worker:app", "--host", "0.0.0.0", "--port", "9303", "--log-level", "warning"]
+    environment:
+      WORKER_NAME: "docs"
+      REQUIRED_SCOPES: "docs:read"
+      SECURE: "1"
+      NAC_PUBLIC_ONLY: "1"
+      NAC_REDIS_URL: "redis://redis:6379/0"
+      NAC_KEY_DIR: "/app/.nac_keys"
+    volumes:
+      - nac-keys:/app/.nac_keys:ro
+    networks: [nacnet]
+    depends_on:
+      oauth:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "9303:9303"
+
+  w-comms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "service_bench_worker:app", "--host", "0.0.0.0", "--port", "9304", "--log-level", "warning"]
+    environment:
+      WORKER_NAME: "comms"
+      REQUIRED_SCOPES: "email:send"
+      SECURE: "1"
+      NAC_PUBLIC_ONLY: "1"
+      NAC_REDIS_URL: "redis://redis:6379/0"
+      NAC_KEY_DIR: "/app/.nac_keys"
+    volumes:
+      - nac-keys:/app/.nac_keys:ro
+    networks: [nacnet]
+    depends_on:
+      oauth:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "9304:9304"
+
+  w-extapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "service_bench_worker:app", "--host", "0.0.0.0", "--port", "9305", "--log-level", "warning"]
+    environment:
+      WORKER_NAME: "external-api"
+      REQUIRED_SCOPES: ""
+      SECURE: "1"
+      NAC_PUBLIC_ONLY: "1"
+      NAC_REDIS_URL: "redis://redis:6379/0"
+      NAC_KEY_DIR: "/app/.nac_keys"
+    volumes:
+      - nac-keys:/app/.nac_keys:ro
+    networks: [nacnet]
+    depends_on:
+      oauth:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "9305:9305"
+
+volumes:
+  nac-keys:
+
+networks:
+  nacnet:
+    driver: bridge

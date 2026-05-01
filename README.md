@@ -1,270 +1,218 @@
-# OAuth 2.1 Token Exchange with Nested Actor Claims for MCP Agentic Workflows
+# Secure Delegation for MCP Agentic Workflows
 
-Reference implementation and evaluation harness for the paper:
-> *Applying OAuth 2.1 Token Exchange with Nested Actor Claims to MCP Agentic Workflows*
+Reference implementation and evaluation harness for the security pattern
+described in the accompanying paper `paper_6.tex`
+(_"Secure Delegation for MCP Agentic Workflows via OAuth Token Exchange
+and Nested Actor Claims"_).
 
-The paper formalises and evaluates a security pattern that eliminates the **Confused Deputy Problem** in Model Context Protocol (MCP) hub-to-worker delegation. The pattern uses RFC 8693 (OAuth 2.0 Token Exchange) with Nested Actor Claims so that each worker receives a token scoped only to that worker — audience-bound, scope-attenuated, and one-time-use — rather than the user's original token forwarded unchanged.
+The pattern defines four security properties for MCP hub-to-worker
+delegation:
 
----
+- **P1** Audience binding — each token is valid only at one target service
+- **P2** Scope attenuation — child tokens carry the minimum scope a worker needs
+- **P3** Delegation chain visibility — every delegation hop is recorded in a nested `act` claim
+- **P4** Atomic single-use enforcement — each child token is consumed on first presentation
 
-## Architecture
-
-```
-         ┌──────────────┐
-   user  │  OAuth Server │  issues root token T₀
-    ──►  │  (port 9300)  │  (or Auth0 in real-IdP mode)
-         └──────┬────────┘
-                │ RFC 8693 /token/exchange  ×4 (concurrent)
-         ┌──────▼────────┐
-         │ Assistant Hub │  MCP orchestrator
-         │  (port 9301)  │  exchanges T₀ → Tᵢ per worker
-         └──┬──┬──┬──┬───┘
-            │  │  │  │  each Tᵢ: aud=Wᵢ, scope=sᵢ, act chain, JTI
-     ┌──────┘  │  │  └──────┐
-     │         │  │         │
-  Calendar   Docs  Comms  External
-  (9302)    (9303) (9304)  (9305)
-```
-
-**Baseline stack** (ports 9200–9205): token passthrough — all 4 attacks succeed  
-**Secure stack** (ports 9300–9305): RFC 8693 NAC — all 4 attacks blocked  
-**Auth0 stack** (port 9400 sidecar): real IdP root token, same NAC enforcement
+Token passthrough (the default in many current MCP deployments) violates all
+four simultaneously. This repository provides a full working implementation
+of the RFC 8693 Nested Actor Claims pattern that restores them by
+construction.
 
 ---
 
-## Prerequisites
+## Key measured results
 
-| Requirement | Version | Purpose |
-|-------------|---------|---------|
-| Python | 3.10+ | runtime |
-| Docker | any | Redis JTI store |
-| Auth0 account | ---- | optional real-IdP demo only |
+All results are reproducible from this repository using the commands below.
+
+| Measurement | Value | Produced by |
+|---|---|---|
+| Attack block rate (A1 scope, A2 lateral, A3 replay) | 100% (30/30 each) | `run_eval.py` |
+| Attribution rate (A4) | 100% (30/30) | `run_eval.py` |
+| Ablation independence (720 trials × 6 configs) | Full NAC is the only config that blocks all four | `run_ablation.py` |
+| Per-hop cryptographic cost | 2.15 ms (RSA-2048 + Redis) | `run_eval.py` |
+| O(k) linearity, k = 1…10 hops | R² = 0.9999 | `run_eval.py` |
+| Co-located end-to-end overhead | +35.6% | `run_eval.py` |
+| Real distributed Docker overhead | +217 ms (baseline 20.8 ms → secure 238.2 ms) | `run_distributed_real.py` |
+| Concurrent stress test (5 agents × 30 rounds) | 600/600 ops, 143 exchanges/s | `run_concurrent_stress.py` |
+| Auth0 real-IdP validation (M2M) | 100% (30/30) | `eval_auth0.py` |
+| Alternative-pattern comparison | Only NAC satisfies all four properties | `run_alt_comparison.py` |
+
+---
+
+## Quick start (3 commands)
 
 ```bash
-# 1. Clone and install
-git clone <repo-url>
-cd agentic_multi_agent_nac_demo_LLM_based
+# 0. Install deps and start Redis (once)
 pip install -r requirements.txt
-
-# 2. Start Redis (keep running in a separate terminal for all demos/evals)
 docker run -d -p 6379:6379 --name nac-redis redis:7-alpine
-```
 
----
-
-## Quick Start — 3 Commands
-
-```bash
-# See the problem: token passthrough lets all 4 attacks succeed
+# 1. See the problem — all four attacks succeed under token passthrough
 python run_problem_demo.py
 
-# See the solution: RFC 8693 NAC blocks all 4 attacks
+# 2. See the solution — all four attacks blocked under RFC 8693 NAC
 python run_solution_demo.py
 
-# Run the full evaluation (N=30 rounds, produces results/eval_results.json)
+# 3. Reproduce the measured numbers (N=30 trials)
 python run_eval.py --rounds 30
 ```
 
-Expected output from `run_solution_demo.py`:
-```
-Attack A1 (scope escalation)   → BLOCKED  [SCOPE_INSUFFICIENT]
-Attack A2 (lateral movement)   → BLOCKED  [WRONG_AUDIENCE]
-Attack A3 (token replay)       → BLOCKED  [TOKEN_REPLAY]
-Attack A4 (identity confusion) → RESOLVED [act chain: assistant-hub → alice]
-```
+---
+
+## Repository layout
+
+### Core library
+
+| File | Role |
+|---|---|
+| `nac_common.py` | JWT issuance, RFC 8693 exchange, Redis JTI store (register / revoke / atomic consume) |
+| `oauth_server.py` | Authorization server with `/token/exchange` and consent endpoints |
+| `assistant_server.py` | MCP hub — concurrent token exchange per worker |
+| `worker_servers.py` | MCP workers (Calendar / Docs / Comms / External-API) |
+| `agents.py` | Agent planners (stub + optional Claude) and attacker agents |
+| `audit_log.py` | Structured JSON-line audit logger |
+
+### Demo scripts
+
+| File | Shows |
+|---|---|
+| `run_problem_demo.py` | Baseline stack on ports 9200–9205; all four attacks succeed |
+| `run_solution_demo.py` | Secure NAC stack on ports 9300–9305; all four attacks blocked |
+
+### Evaluation scripts
+
+| File | Measures | Output |
+|---|---|---|
+| `run_eval.py` | Attack block rates + end-to-end latency + per-hop cost | `results/eval_results.json` |
+| `eval_harness.py` | Library used by `run_eval.py` | — |
+| `run_ablation.py` | 720-trial ablation: 6 configs × 4 attacks × 30 trials | `results/ablation_results.json` |
+| `run_concurrent_stress.py` | 5 concurrent agents × 30 rounds; Redis atomicity under load | `results/stress_results.json` |
+| `run_alt_comparison.py` | Measured comparison against Passthrough, Passthrough+Aud, Introspection, Token Vault | `alt_comparison_results.json` |
+| `run_distributed_real.py` | End-to-end latency against a real containerised six-service topology | `distributed_real_results.json` |
+| `generate_charts.py` | Paper figures from evaluation results | `figures/*.png` |
+
+### Distributed deployment (Docker)
+
+| File | Role |
+|---|---|
+| `Dockerfile` | Common image for oauth server + benchmark workers |
+| `docker-compose.distributed.yml` | 6-service stack (redis + oauth + 4 workers) on a Docker bridge network |
+| `service_bench_oauth.py` | Containerised oauth server entrypoint |
+| `service_bench_worker.py` | Minimal HTTP worker (pure validation, no MCP) used inside containers |
+
+### Auth0 real-IdP integration
+
+| File | Role |
+|---|---|
+| `auth0_config.py` | Reads `.env`, derives Auth0 settings |
+| `auth0_exchange_server.py` | RFC 8693 sidecar that validates Auth0 JWTs and issues NAC child tokens |
+| `run_auth0_demo.py` | 18-check end-to-end Auth0 demo |
+| `eval_auth0.py` | Auth0 evaluation harness (30-trial attack test) |
+| `AUTH0_SETUP.md` | Step-by-step Auth0 tenant setup guide (~15 min) |
+
+### Paper
+
+| File | Role |
+|---|---|
+| `paper_6.tex` | LaTeX source — compile twice with `pdflatex paper_6.tex` |
 
 ---
 
-## Running the Full Evaluation Suite
+## Full evaluation suite
 
 ```bash
-# Main evaluation — attack block rates + latency tables
+# Main evaluation (attack block rates, latency, per-hop cost)
 python run_eval.py --rounds 30
 # → results/eval_results.json
 
-# Ablation study — 720 trials across 6 enforcement configurations
+# Ablation study (720 trials)
 python run_ablation.py --trials 30
 # → results/ablation_results.json
 
-# Concurrent stress test — 5 agents × 30 rounds × 4 workers
+# Concurrent stress test
 python run_concurrent_stress.py
 # → results/stress_results.json
 
-# Generate paper figures from eval results
-python generate_charts.py
-# → figures/nac_fig1_attacks.png … nac_fig5_hop_costs.png
+# Alternative-pattern comparison
+python run_alt_comparison.py --trials 30
+# → alt_comparison_results.json
 
-# Auth0 real-IdP evaluation (requires Auth0 setup — see below)
+# Real distributed evaluation (Docker)
+docker compose -f docker-compose.distributed.yml up --build -d
+python run_distributed_real.py --trials 30
+docker compose -f docker-compose.distributed.yml down
+# → distributed_real_results.json
+
+# Generate figures
+python generate_charts.py
+# → figures/nac_fig*.png
+
+# Auth0 validation (requires .env setup — see AUTH0_SETUP.md)
 python eval_auth0.py --rounds 30
 # → results/eval_auth0_results.json
 ```
 
 ---
 
-## File Map
-
-```
-Core implementation
-├── nac_common.py            JWT issuance, RFC 8693 exchange, Redis JTI store
-├── oauth_server.py          Authorization server with /token/exchange endpoint
-├── assistant_server.py      MCP hub — concurrent token exchange per worker
-├── worker_servers.py        Calendar/Docs/Comms/External-API MCP workers
-├── agents.py                SimpleLLMPlanner, RealLLMAgent (Claude), attack agents
-├── audit_log.py             Structured JSON-line audit logger
-
-Demo scripts
-├── run_problem_demo.py      Baseline insecure stack (ports 9200–9205)
-├── run_solution_demo.py     Secure NAC stack (ports 9300–9305)
-├── run_eval.py              Runs both stacks and evaluation harness
-
-Evaluation
-├── eval_harness.py          Attack tests + latency + per-hop measurements
-├── run_ablation.py          Ablation study: 720 trials × 6 enforcement configs
-├── run_concurrent_stress.py Concurrent agent stress test (5 agents, 600 ops)
-├── generate_charts.py       Paper figures from eval results
-
-Auth0 integration
-├── auth0_config.py          Auth0 settings (reads from .env)
-├── auth0_exchange_server.py RFC 8693 sidecar — validates Auth0 JWTs, issues child tokens
-├── run_auth0_demo.py        Auth0 demo (18 security checks)
-├── eval_auth0.py            Auth0 evaluation harness
-├── AUTH0_SETUP.md           Detailed Auth0 setup guide
-├── .env.auth0.example       Environment variable template
-
-Results (generated — not committed)
-├── results/eval_results.json        Main evaluation results
-├── results/ablation_results.json    Ablation study results
-├── results/stress_results.json      Concurrent stress test results
-└── results/eval_auth0_results.json  Auth0 validation results
-
-Figures (generated — not committed)
-├── figures/nac_fig1_attacks.png
-├── figures/nac_fig2_latency.png
-├── figures/nac_fig3_token_sizes.png
-├── figures/nac_fig4_summary.png
-└── figures/nac_fig5_hop_costs.png
-
-Paper
-└── paper_5.tex              LaTeX source (IEEEtran journal format)
-```
-
----
-
-## Port Layout
+## Port layout
 
 | Stack | OAuth / Sidecar | Hub | Calendar | Docs | Comms | External |
-|-------|----------------|-----|----------|------|-------|----------|
+|---|---|---|---|---|---|---|
 | Baseline (insecure) | 9200 | 9201 | 9202 | 9203 | 9204 | 9205 |
 | Secure (NAC) | 9300 | 9301 | 9302 | 9303 | 9304 | 9305 |
 | Auth0 sidecar | 9400 | — | — | — | — | — |
 | Redis | 6379 | — | — | — | — | — |
+| Docker distributed | 9300 (oauth) | — | 9302 | 9303 | 9304 | 9305 |
 
 ---
 
-## Security Properties Verified
+## Auth0 integration (optional)
 
-| ID | Property | JWT Claim | Attack Tested |
-|----|----------|-----------|---------------|
-| P1 | Audience binding | `aud` per worker | A2 lateral movement |
-| P2 | Scope attenuation | child scope ⊆ parent | A1 scope escalation |
-| P3 | Delegation chain visibility | nested `act` claim | A4 identity attribution |
-| — | One-time-use JTI | `jti` + Redis revocation | A3 token replay |
-
----
-
-## Key Results
-
-| Metric | Value |
-|--------|-------|
-| Attack block rate A1–A4 | **100%** (30/30 each, N=30) |
-| Ablation (720 trials) | Full NAC is the **only** config that blocks all 4 attacks |
-| Per-hop crypto cost | **2.15 ms** (RSA-2048 sign + Redis write) |
-| O(k) linearity | R² = 0.9999 over k = 1…10 hops |
-| End-to-end overhead | +35.6% sequential; ~O(1) with concurrent issuance |
-| Concurrent stress test | 600/600 ops, 0 false positives, 143 exchanges/s |
-| Auth0 validation | **100%** (30/30) with live Auth0 M2M root tokens |
-
----
-
-## Auth0 Real-IdP Integration
-
-Validates the RFC 8693 sidecar pattern against a live Auth0 tenant.
-**Auth0 Setup takes ~15 minutes.**
-
-### Step 1 — Create API in Auth0 Dashboard
-
-Applications → APIs → **+ Create API**
-- Name: `MCP Hub`
-- Identifier: `https://mcp-hub.example.com` ← this is `AUTH0_HUB_AUDIENCE`
-- Signing Algorithm: RS256
-
-Open the new API → **Permissions** tab → add each scope:
-
-| Permission | Description |
-|-----------|-------------|
-| `calendar:read` | Read calendar events |
-| `docs:read` | Read documents |
-| `comms:send` | Send communications |
-| `external:fetch` | Fetch from external APIs |
-
-### Step 2 — Create M2M Application
-
-Applications → Applications → **+ Create Application** → Machine to Machine
-- Name: `MCP Hub M2M`
-- Authorize for `MCP Hub` API → check all 4 scopes → Authorize
-- Copy: **Domain**, **Client ID**, **Client Secret**
-
-### Step 3 — Configure credentials
-
-Create `.env` in the project root:
-
-```
-AUTH0_DOMAIN=YOUR_TENANT.us.auth0.com
-AUTH0_CLIENT_ID=YOUR_CLIENT_ID
-AUTH0_CLIENT_SECRET=YOUR_CLIENT_SECRET
-AUTH0_HUB_AUDIENCE=https://mcp-hub.example.com
-AUTH0_ROOT_SCOPES=calendar:read docs:read comms:send external:fetch
-```
-
-### Step 4 — Run
+Validates the RFC 8693 sidecar pattern against a live production identity
+provider. ~15 minutes to set up.
 
 ```bash
-python run_auth0_demo.py --check-only   # validate config
-python run_auth0_demo.py                # full 18-check demo
-python eval_auth0.py --rounds 30        # evaluation with real tokens
+# After configuring .env (see AUTH0_SETUP.md):
+python run_auth0_demo.py --check-only    # validate config
+python run_auth0_demo.py                 # full end-to-end demo
+python eval_auth0.py --rounds 30         # 30-trial attack test with real tokens
 ```
 
-See `AUTH0_SETUP.md` for detailed troubleshooting.
+`AUTH0_SETUP.md` contains the detailed setup steps (API creation, M2M
+client configuration, `.env` template, troubleshooting).
 
 ---
 
-## Compile the Paper
+## Design invariants
 
-```bash
-pdflatex paper_5.tex && pdflatex paper_5.tex
-```
-
-Run twice — second pass resolves cross-references and figure placement.
-Requires a TeX distribution with: IEEEtran, pgfplots, booktabs, tikz, colortbl.
+1. **`NAC_PUBLIC_ONLY=1` on workers** — workers cannot load the private signing key; worker compromise does not enable token forgery.
+2. **Atomic JTI consumption** — workers use `consume_jti()` (Redis Lua script) rather than a separate check-then-revoke pair. No TOCTOU race.
+3. **`CHILD_TOKEN_TTL + 60 = 180 s` cleanup horizon** — revoked JTIs survive the token's full remaining lifetime.
+4. **`asyncio.gather` in `assistant_server.py`** — concurrent token exchange (optional batch optimisation; sequential per-request exchange also supported).
+5. **Redis as JTI state store** — sub-millisecond atomic operations; supports Lua scripts for single-shot check-and-mark.
 
 ---
 
-## Optional: Real LLM Planner
+## Optional: real Claude LLM planner
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... python run_solution_demo.py
 ```
 
-Uses Claude Sonnet as the MCP agent planner. Without the key, a deterministic stub planner is used (produces identical security results).
+Uses Claude Sonnet as the MCP agent planner. Without the key, a
+deterministic stub planner is used (identical security results).
 
 ---
 
-## Design Invariants
+## Prerequisites
 
-These are load-bearing for the paper's security claims.
+| Requirement | Version | Purpose |
+|---|---|---|
+| Python | 3.10+ | runtime |
+| Docker | any recent | Redis + distributed evaluation |
+| Auth0 account | — | optional (for real-IdP demo only) |
 
-1. **`NAC_PUBLIC_ONLY=1` on workers** — workers cannot load the private signing key
-2. **`revoke_jti()` stores `time.time()`** not `0.0` — prevents immediate cleanup from deleting revocation records
-3. **Cleanup horizon = `CHILD_TOKEN_TTL + 60 = 180s`** — revoked JTIs survive their token's full TTL
-4. **`asyncio.gather` in `assistant_server.py`** — concurrent token exchange (O(1) overhead per Proposition 1)
-5. **Redis as JTI store** — ~0.1 ms/op; file-based locks on Windows are ~65 ms/op
+---
+
+## License
+
+Released under MIT for reference-implementation use.

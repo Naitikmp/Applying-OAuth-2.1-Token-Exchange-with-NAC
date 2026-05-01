@@ -1,0 +1,81 @@
+{
+  "trials": 30,
+  "introspect_rtt_ms": 1.0,
+  "patterns": [
+    {
+      "name": "Passthrough",
+      "block_rates": {
+        "A1": 0.0,
+        "A2": 0.0,
+        "A3": 0.0
+      },
+      "attribution": 0.0,
+      "latency_ms": {
+        "mean": 0.4508433223236352,
+        "median": 0.09345001308247447,
+        "stdev": 1.9295583273886223,
+        "n": 30
+      }
+    },
+    {
+      "name": "Passthrough+Aud",
+      "block_rates": {
+        "A1": 0.0,
+        "A2": 1.0,
+        "A3": 0.0
+      },
+      "attribution": 0.0,
+      "latency_ms": {
+        "mean": 0.10031999748510619,
+        "median": 0.09560002945363522,
+        "stdev": 0.014739969378149222,
+        "n": 30
+      }
+    },
+    {
+      "name": "Introspection",
+      "block_rates": {
+        "A1": 0.0,
+        "A2": 1.0,
+        "A3": 0.0
+      },
+      "attribution": 0.0,
+      "latency_ms": {
+        "mean": 12.673033333461111,
+        "median": 12.81149999704212,
+        "stdev": 0.7880167916324049,
+        "n": 30
+      }
+    },
+    {
+      "name": "Token Vault",
+      "block_rates": {
+        "A1": 1.0,
+        "A2": 1.0,
+        "A3": 0.0
+      },
+      "attribution": 0.0,
+      "latency_ms": {
+        "mean": 0.09653000355077286,
+        "median": 0.09595000301487744,
+        "stdev": 0.0048930010442569056,
+        "n": 30
+      }
+    },
+    {
+      "name": "RFC 8693 NAC",
+      "block_rates": {
+        "A1": 1.0,
+        "A2": 1.0,
+        "A3": 1.0
+      },
+      "attribution": 1.0,
+      "latency_ms": {
+        "mean": 3.9805033380010477,
+        "median": 3.9026000013109297,
+        "stdev": 0.4497600678091622,
+        "n": 30
+      }
+    }
+  ]
+}
