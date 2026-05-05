@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(grep:*)",
-      "PowerShell(Get-ChildItem -Path \"D:\\\\Research paper\\\\Applying OAuth 2.1 Token Exchange with NAC\" -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {$_.Extension -match '\\\\.\\(py|md|txt|json|yml|yaml|env\\)$'} | Select-Object -ExpandProperty FullName | Select-Object -First 100)"
+      "PowerShell(Get-ChildItem -Path \"D:\\\\Research paper\\\\Applying OAuth 2.1 Token Exchange with NAC\" -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {$_.Extension -match '\\\\.\\(py|md|txt|json|yml|yaml|env\\)$'} | Select-Object -ExpandProperty FullName | Select-Object -First 100)",
+      "Bash(C:/Users/Naitik/AppData/Local/Programs/Python/Python310/python.exe *)"
     ]
   }
 }

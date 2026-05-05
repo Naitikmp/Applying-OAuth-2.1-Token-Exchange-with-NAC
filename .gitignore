@@ -70,4 +70,5 @@ env/
 *.mo
 
 paper.tex
+paper_submit.tex
 .nac_keys
